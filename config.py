@@ -33,6 +33,13 @@ def _load_keys() -> dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             keys[k.strip()] = v.strip()
+    # Environment variables supplement/override the key file, so a container can
+    # inject secrets as env vars instead of mounting a key file.
+    for name in ("ALPACA_DAILY_API_KEY", "ALPACA_DAILY_SECRET_KEY",
+                 "ALPACA_WEEKLY_API_KEY", "ALPACA_WEEKLY_SECRET_KEY",
+                 "ALPACA_YOLO_API_KEY", "ALPACA_YOLO_SECRET_KEY"):
+        if os.environ.get(name):
+            keys[name] = os.environ[name]
     return keys
 
 
@@ -140,8 +147,17 @@ WEEKLY = {
 YOLO = {
     "safety_floor": True,
     "max_position_pct": 0.25,        # max notional in one position (% of equity)
+    "max_risk_pct": 0.02,            # max entry->stop risk per trade (% of equity)
     "max_concurrent_positions": 5,
     "require_stop_loss": True,
     "allowed_assets": ["us_equity", "us_etf", "us_option"],  # retail-accessible only
     "crypto_allowlist": CRYPTO_ALLOWLIST,  # crypto: BTC only (no other crypto)
+    # v1 auto-trade universe (liquid, retail-accessible US equities/ETFs).
+    # Options and BTC/USD are excluded from v1 auto-execution because they need
+    # the options-chain / crypto market-data endpoints, which are follow-ups.
+    "watchlist": [
+        "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "IEF", "HYG",
+        "XLF", "XLE", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "SMH",
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    ],
 }

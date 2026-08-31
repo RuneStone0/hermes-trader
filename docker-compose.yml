@@ -1,0 +1,34 @@
+# Hermes Trader — self-contained paper-trading service.
+# Deploy on the Umbrel host:  docker compose up -d --build
+# Secrets are read from a sibling .env file (chmod 600, never committed).
+services:
+  trader:
+    build: .
+    image: hermes-trader:latest
+    container_name: hermes-trader
+    restart: unless-stopped
+    environment:
+      TRADER_HOME: /data
+      PORT: "8080"
+      LLM_MODEL: ${LLM_MODEL:-deepseek-v4-pro}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY in .env}
+      ALPACA_DAILY_API_KEY: ${ALPACA_DAILY_API_KEY:?set ALPACA_DAILY_API_KEY in .env}
+      ALPACA_DAILY_SECRET_KEY: ${ALPACA_DAILY_SECRET_KEY:?set ALPACA_DAILY_SECRET_KEY in .env}
+      ALPACA_WEEKLY_API_KEY: ${ALPACA_WEEKLY_API_KEY:?set ALPACA_WEEKLY_API_KEY in .env}
+      ALPACA_WEEKLY_SECRET_KEY: ${ALPACA_WEEKLY_SECRET_KEY:?set ALPACA_WEEKLY_SECRET_KEY in .env}
+      ALPACA_YOLO_API_KEY: ${ALPACA_YOLO_API_KEY:?set ALPACA_YOLO_API_KEY in .env}
+      ALPACA_YOLO_SECRET_KEY: ${ALPACA_YOLO_SECRET_KEY:?set ALPACA_YOLO_SECRET_KEY in .env}
+    volumes:
+      - trader-data:/data
+    ports:
+      # Bind to host loopback only: dashboard/health are read-only and unauthenticated,
+      # so do NOT expose them on the LAN. Review via SSH tunnel (see DEPLOY.md).
+      - "127.0.0.1:8080:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  trader-data:

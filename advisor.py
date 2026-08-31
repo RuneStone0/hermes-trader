@@ -82,3 +82,39 @@ def decide(context: dict, model: str | None = None) -> dict:
 
     return {"decision": decision, "rationale": out.get("rationale", ""),
             "size_multiplier": size_mult}
+
+
+def chat(system: str, user: str, model: str | None = None,
+         temperature: float = 0.2, max_tokens: int = 2000) -> str:
+    """Single-turn chat completion returning the final assistant content.
+
+    Works with reasoning models (e.g. deepseek-v4-pro) that emit
+    `reasoning_content` before the final `content` — we return only `content`.
+    """
+    if not config.DEEPSEEK_API_KEY:
+        raise AdvisorError("No DEEPSEEK_API_KEY configured")
+
+    model = model or config.LLM_MODEL
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    req = urllib.request.Request(
+        config.LLM_BASE_URL + "/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode())
+
+    msg = (data.get("choices") or [{}])[0].get("message", {})
+    return msg.get("content") or ""
