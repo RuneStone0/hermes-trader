@@ -21,12 +21,12 @@ curl -s localhost:8080/health
 
 ## Reviewing the dashboard
 
-The dashboard is read-only and unauthenticated, so it binds to **host loopback
-only**. View it through an SSH tunnel from your workstation:
+The dashboard is read-only and unauthenticated, served on
+**`http://umbrel.local:1234`** (host port 1234 → container 8080). If the page
+doesn't load from your desktop, the host firewall is blocking the port — allow it:
 
 ```bash
-ssh -L 8080:localhost:8080 umbrel@umbrel.local
-# then open http://localhost:8080 in your browser
+sudo ufw allow 1234/tcp    # or add port 1234 in umbrelOS Settings -> Firewall
 ```
 
 ## Updating (push new code, redeploy)

@@ -21,8 +21,8 @@ services:
     volumes:
       - trader-data:/data
     ports:
-      # Bind to host loopback only: dashboard/health are read-only and unauthenticated,
-      # so do NOT expose them on the LAN. Review via SSH tunnel (see DEPLOY.md).
+      # LAN access for the dashboard (umbrel.local:1234) + loopback for the host-local monitor.
+      - "1234:8080"
       - "127.0.0.1:8080:8080"
     logging:
       driver: json-file
