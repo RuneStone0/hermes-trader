@@ -52,9 +52,11 @@ def main() -> None:
         clock = client.clock()
     except AlpacaError as e:
         print(f"[weekly] clock error: {e}")
+        db.log_event(ACCOUNT, "weekly_pullback", "error", f"clock error: {e}", dedup=True)
         return
     if not clock.get("is_open"):
         print("[weekly] market closed")
+        db.log_event(ACCOUNT, "weekly_pullback", "skip", "market closed", dedup=True)
         return
 
     equity = float(client.account().get("equity", 10000.0))
@@ -69,24 +71,29 @@ def main() -> None:
                 et = datetime.fromisoformat(held["entry_time"].replace("Z", "+00:00"))
                 if datetime.now(et.tzinfo) - et > timedelta(days=config.WEEKLY["max_hold_days"]):
                     print(f"[weekly] max hold exceeded, closing {SYMBOL}")
+                    db.log_event(ACCOUNT, "weekly_pullback", "exit",
+                                 f"closed {SYMBOL}: max hold ({config.WEEKLY['max_hold_days']}d) exceeded")
                     if not args.dry_run:
                         client.cancel_all()
                         client.close_position(SYMBOL)
                     return
             except ValueError:
                 pass
+        db.log_event(ACCOUNT, "weekly_pullback", "skip", "already positioned", dedup=True)
         return  # already positioned
 
     # 2. Fetch daily bars for trend + ATR.
     bars = client.bars(SYMBOL, timeframe="1Day", limit=140, start=None).get("bars", [])
     if len(bars) < 120:
         print("[weekly] insufficient daily bars")
+        db.log_event(ACCOUNT, "weekly_pullback", "error", "insufficient daily bars")
         return
     closes = [float(b["c"]) for b in bars]
     sma100 = sma(closes, 100)[-1]
     atr14 = atr(bars, 14)[-1]
     if sma100 is None or atr14 is None or atr14 <= 0:
         print("[weekly] insufficient indicator data")
+        db.log_event(ACCOUNT, "weekly_pullback", "error", "insufficient indicator data")
         return
     last = closes[-1]
 
@@ -106,6 +113,7 @@ def main() -> None:
         setup = {"side": "short", "entry": entry, "stop": stop, "target": target,
                  "trend": "downtrend"}
     if not setup:
+        db.log_event(ACCOUNT, "weekly_pullback", "skip", "no pullback to SMA today", dedup=True)
         return
 
     risk_dollars = equity * config.RISK_PCT_PER_TRADE
@@ -115,6 +123,8 @@ def main() -> None:
                               setup["side"], shares)
     if not rr["clears"]:
         print(f"[weekly] no-go: fee-adjusted R:R {rr['net_rr']} < {config.MIN_NET_RR}")
+        db.log_event(ACCOUNT, "weekly_pullback", "no_go",
+                     f"net R:R {rr['net_rr']} below floor {config.MIN_NET_RR} after fees")
         return
 
     ctx = {
@@ -132,10 +142,12 @@ def main() -> None:
         decision = advisor.decide(ctx)
     except Exception as e:
         print(f"[weekly] advisor error -> no trade: {e}")
+        db.log_event(ACCOUNT, "weekly_pullback", "error", f"advisor error: {e}")
         return
 
     if decision["decision"] not in ("go", "size_down"):
         print(f"[weekly] NO-GO: {decision['rationale']}")
+        db.log_event(ACCOUNT, "weekly_pullback", "no_go", f"LLM: {decision['rationale']}")
         return
 
     shares2 = shares
@@ -167,6 +179,10 @@ def main() -> None:
     _save_state({"last_order_id": order.get("id"), "side": setup["side"],
                  "entry": setup["entry"], "placed_at": datetime.now(ET).isoformat()})
     print(f"[weekly] bracket order placed: {order.get('id')}")
+    db.log_event(ACCOUNT, "weekly_pullback", "go",
+                 f"{decision['decision']} {setup['side']} {SYMBOL} x{shares2}",
+                 detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
+                         f"target={setup['target']:.2f} | {decision['rationale']}"))
 
 
 if __name__ == "__main__":

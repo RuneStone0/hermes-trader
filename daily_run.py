@@ -113,9 +113,11 @@ def main() -> None:
         clock = client.clock()
     except AlpacaError as e:
         print(f"[daily] clock error: {e}")
+        db.log_event(ACCOUNT, "daily_orb", "error", f"clock error: {e}", dedup=True)
         return
     if not clock.get("is_open"):
         print("[daily] market closed")
+        db.log_event(ACCOUNT, "daily_orb", "skip", "market closed", dedup=True)
         return
 
     d = _date()
@@ -129,26 +131,31 @@ def main() -> None:
     # 1. Force flat by the configured cutoff.
     if pos and hm >= config.DAILY["flat_by"]:
         print(f"[daily] {hm} flattening {SYMBOL}")
+        db.log_event(ACCOUNT, "daily_orb", "exit", f"flattened {SYMBOL} at {hm} (time stop)")
         if not args.dry_run:
             try:
                 client.cancel_all()
                 client.close_position(SYMBOL)
             except AlpacaError as e:
                 print(f"[daily] flatten error: {e}")
+                db.log_event(ACCOUNT, "daily_orb", "error", f"flatten error: {e}")
         return
 
     # 2. Already decided today.
     if st.get("decided"):
+        db.log_event(ACCOUNT, "daily_orb", "skip", "already decided today", dedup=True)
         return
 
     # 3. Wait for the ORB window to complete.
     if hm <= config.DAILY["orb_end"]:
+        db.log_event(ACCOUNT, "daily_orb", "skip", "waiting for opening range", dedup=True)
         return
 
     # 4. Evaluate the breakout setup.
     bars = client.bars(SYMBOL, timeframe="5Min", limit=80, start=d).get("bars", [])
     setup = _orb_setup(bars, equity)
     if not setup:
+        db.log_event(ACCOUNT, "daily_orb", "skip", "no breakout yet today", dedup=True)
         return  # no breakout yet today; keep waiting
 
     # 5. Fee-adjusted R:R gate.
@@ -158,6 +165,8 @@ def main() -> None:
         st.update(decided=True, decision="no_go", note="net R:R below threshold after fees")
         _save_state(d, st)
         print(f"[daily] no-go: fee-adjusted R:R {rr['net_rr']} < {config.MIN_NET_RR}")
+        db.log_event(ACCOUNT, "daily_orb", "no_go",
+                     f"net R:R {rr['net_rr']} below floor {config.MIN_NET_RR} after fees")
         return
 
     # 6. LLM decision gate.
@@ -179,12 +188,14 @@ def main() -> None:
         st.update(decided=True, decision="no_go", note=f"advisor error: {e}")
         _save_state(d, st)
         print(f"[daily] advisor error -> no trade: {e}")
+        db.log_event(ACCOUNT, "daily_orb", "error", f"advisor error: {e}")
         return
 
     if decision["decision"] not in ("go", "size_down"):
         st.update(decided=True, decision="no_go", note=decision["rationale"])
         _save_state(d, st)
         print(f"[daily] NO-GO: {decision['rationale']}")
+        db.log_event(ACCOUNT, "daily_orb", "no_go", f"LLM: {decision['rationale']}")
         return
 
     shares = setup["shares"]
@@ -218,6 +229,10 @@ def main() -> None:
     st.update(decided=True, decision=decision["decision"], order_id=order.get("id"))
     _save_state(d, st)
     print(f"[daily] bracket order placed: {order.get('id')}")
+    db.log_event(ACCOUNT, "daily_orb", "go",
+                 f"{decision['decision']} {setup['side']} {SYMBOL} x{shares}",
+                 detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
+                         f"target={setup['target']:.2f} | {decision['rationale']}"))
 
 
 if __name__ == "__main__":

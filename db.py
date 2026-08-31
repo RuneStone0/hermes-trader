@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS trades (
 
 CREATE INDEX IF NOT EXISTS idx_trades_account ON trades(account);
 CREATE INDEX IF NOT EXISTS idx_trades_status  ON trades(status);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL,            -- daily | weekly | yolo
+    strategy TEXT NOT NULL,           -- daily_orb | weekly_pullback | yolo
+    decision TEXT NOT NULL,           -- go | no_go | skip | exit | error
+    reason TEXT,                      -- human-readable "why"
+    detail TEXT,                      -- optional extra (symbol/qty/prices/rationale)
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_account ON events(account);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 """
 
 
@@ -108,5 +120,62 @@ def all_trades(account: str | None = None) -> list[sqlite3.Row]:
                 "SELECT * FROM trades WHERE account=? ORDER BY id", (account,)
             ).fetchall()
         return conn.execute("SELECT * FROM trades ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def log_event(account: str, strategy: str, decision: str, reason: str = "",
+              detail: str | None = None, dedup: bool = False) -> int:
+    """Record a bot decision/activity for the dashboard's decision log.
+
+    dedup=True refreshes the timestamp of the last identical (account, strategy,
+    decision, reason) event instead of inserting a duplicate — for no-op/waiting
+    states that would otherwise spam the log every tick.
+    """
+    conn = connect()
+    try:
+        if dedup:
+            row = conn.execute(
+                "SELECT id FROM events WHERE account=? AND strategy=? AND decision=? "
+                "AND COALESCE(reason,'')=? ORDER BY id DESC LIMIT 1",
+                (account, strategy, decision, reason or ""),
+            ).fetchone()
+            if row:
+                conn.execute("UPDATE events SET created_at=? WHERE id=?", (_now(), row["id"]))
+                conn.commit()
+                return row["id"]
+        cur = conn.execute(
+            "INSERT INTO events (account,strategy,decision,reason,detail,created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (account, strategy, decision, reason or "", detail, _now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def recent_events(limit: int = 50, account: str | None = None) -> list[sqlite3.Row]:
+    conn = connect()
+    try:
+        if account:
+            return conn.execute(
+                "SELECT * FROM events WHERE account=? ORDER BY id DESC LIMIT ?",
+                (account, int(limit)),
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (int(limit),)
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def last_event(account: str, strategy: str) -> sqlite3.Row | None:
+    conn = connect()
+    try:
+        return conn.execute(
+            "SELECT * FROM events WHERE account=? AND strategy=? ORDER BY id DESC LIMIT 1",
+            (account, strategy),
+        ).fetchone()
     finally:
         conn.close()

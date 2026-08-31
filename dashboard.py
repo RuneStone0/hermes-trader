@@ -103,22 +103,74 @@ def _open_rows(rows) -> str:
     return "".join(out)
 
 
+_STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
+_STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback",
+                   "yolo": "YOLO"}
+_DECISION_COLORS = {
+    "go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
+    "skip": "#8b949e", "error": "#f85149",
+}
+
+
+def _fmt_ts(s: str) -> str:
+    try:
+        dt = datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+        return dt.strftime("%m-%d %H:%M")
+    except ValueError:
+        return s or ""
+
+
+def _event_badge(decision: str) -> str:
+    color = _DECISION_COLORS.get(decision, "#8b949e")
+    return (f"<span style='display:inline-block;padding:1px 8px;border-radius:999px;"
+            f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'>"
+            f"{decision.upper()}</span>")
+
+
+def _events_rows(events) -> str:
+    if not events:
+        return ("<tr><td colspan='5' class='muted'>No activity yet — the bots log "
+                "their decisions here as they run.</td></tr>")
+    out = []
+    for e in events:
+        reason = html.escape(e["reason"] or "")
+        detail = html.escape(e["detail"] or "")
+        if detail:
+            reason = f"{reason} <span class='muted'>· {detail}</span>"
+        out.append(
+            f"<tr><td class='muted'>{_fmt_ts(e['created_at'])}</td>"
+            f"<td>{html.escape(e['account'])}</td>"
+            f"<td class='muted'>{_STRATEGY_LABEL.get(e['strategy'], e['strategy'])}</td>"
+            f"<td>{_event_badge(e['decision'])}</td>"
+            f"<td>{reason}</td></tr>"
+        )
+    return "".join(out)
+
+
 def build() -> str:
     db.init_db()
     all_t = db.all_trades()
     closed = [t for t in all_t if t["status"] == "closed"]
     open_t = db.open_trades()
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
+    events = db.recent_events(60)
 
     acct_cards = []
     for a in ("daily", "weekly", "yolo"):
         s = _stats([t for t in closed if t["account"] == a])
+        le = db.last_event(a, _STRATEGY[a])
+        last_line = ""
+        if le:
+            last_line = (f"<div class='muted' style='font-size:11px;margin-top:6px'>"
+                         f"{_event_badge(le['decision'])} "
+                         f"{html.escape((le['reason'] or '')[:90])}</div>")
         acct_cards.append(
             f"<div class='acct'><h3>{a.upper()}</h3>"
             f"<div class='big {('pos' if s['net'] > 0 else ('neg' if s['net'] < 0 else ''))}'>"
             f"{_money(s['net'])}</div>"
             f"<div class='muted'>gross {_money(s['gross'])} · fees {_money(s['fees'])}</div>"
-            f"<div class='muted'>{s['n']} trades · {s['win_rate']:.0%} win</div></div>"
+            f"<div class='muted'>{s['n']} trades · {s['win_rate']:.0%} win</div>"
+            f"{last_line}</div>"
         )
 
     s_all = _stats(closed)
@@ -176,6 +228,10 @@ tr:last-child td{{border-bottom:none}}
 
 <h2>Per account</h2>
 <div class='accts'>{''.join(acct_cards)}</div>
+
+<h2>Decision log</h2>
+<div class='panel'><table><tr><th>Time</th><th>Acct</th><th>Strategy</th><th>Decision</th><th>Reason</th></tr>
+{_events_rows(events)}</table></div>
 
 <h2>Equity curve (cumulative net P/L)</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
