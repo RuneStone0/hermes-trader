@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang='en'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Alpaca Trading Dashboard</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+--pos:#3fb950;--neg:#f85149;--accent:#58a6ff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:24px;max-width:1100px;margin:0 auto}
+h1{font-size:20px;font-weight:600}
+h2{font-size:15px;margin:28px 0 12px;font-weight:600}
+h3{font-size:13px;color:var(--accent);margin-bottom:6px}
+.muted{color:var(--muted)}
+.big{font-size:22px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:16px 0}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.card-title{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.card-value{font-size:22px;font-weight:600;margin-top:4px}
+.card-sub{color:var(--muted);font-size:12px;margin-top:2px}
+.pos{color:var(--pos)}.neg{color:var(--neg)}
+.accts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:16px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
+tr:last-child td{border-bottom:none}
+.curve{width:100%;height:auto;background:var(--card);border:1px solid var(--border);border-radius:10px}
+.curve path{fill:none;stroke:var(--accent);stroke-width:2}
+.curve .zero{stroke:var(--border);stroke-dasharray:4 4}
+.footer{color:var(--muted);font-size:12px;margin-top:24px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
+</style></head><body>
+<h1>Alpaca Trading Dashboard <span class='badge'>PAPER</span></h1>
+<div class='muted' style='margin-top:4px'>Three accounts · net P/L includes modelled regulatory fees (SEC / TAF / CAT) · generated 2026-08-31 01:12 UTC</div>
+
+<h2>All accounts</h2>
+<div class='grid'>
+<div class='card'><div class='card-title'>Net P/L</div><div class='card-value pos'>$531.34</div><div class='card-sub'>gross $532.60 · fees $1.26</div></div>
+<div class='card'><div class='card-title'>Closed trades</div><div class='card-value '>6</div><div class='card-sub'></div></div>
+<div class='card'><div class='card-title'>Win rate</div><div class='card-value '>50%</div><div class='card-sub'></div></div>
+<div class='card'><div class='card-title'>Open positions</div><div class='card-value '>1</div><div class='card-sub'></div></div>
+</div>
+
+<h2>Per account</h2>
+<div class='accts'><div class='acct'><h3>DAILY</h3><div class='big pos'>$72.24</div><div class='muted'>gross $72.60 · fees $0.36</div><div class='muted'>2 trades · 50% win</div></div><div class='acct'><h3>WEEKLY</h3><div class='big pos'>$39.60</div><div class='muted'>gross $40.00 · fees $0.40</div><div class='muted'>2 trades · 50% win</div></div><div class='acct'><h3>YOLO</h3><div class='big pos'>$419.50</div><div class='muted'>gross $420.00 · fees $0.50</div><div class='muted'>2 trades · 50% win</div></div></div>
+
+<h2>Equity curve (cumulative net P/L)</h2>
+<div class='panel'><svg viewBox='0 0 920 240' class='curve'><path d='M24.0,202.8 L198.4,86.3 L372.8,111.7 L547.2,37.2 L721.6,55.9 L896.0,121.2'/></svg></div>
+
+<h2>Open positions</h2>
+<div class='panel'><table><tr><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Stop</th><th>Target</th></tr>
+<tr><td>yolo</td><td>yolo</td><td>META</td><td>long</td><td>10</td><td>$140.00</td><td>$135.00</td><td>$150.00</td></tr></table></div>
+
+<h2>Recent closed trades</h2>
+<div class='panel'><table><tr><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
+<tr><td>weekly</td><td>weekly_pullback</td><td>SPY</td><td>long</td><td>40</td><td>$768.00</td><td>$761.00</td><td class='neg'>$-280.20</td></tr><tr><td>yolo</td><td>yolo</td><td>NVDA</td><td>long</td><td>20</td><td>$130.00</td><td>$126.00</td><td class='neg'>$-80.20</td></tr><tr><td>weekly</td><td>weekly_pullback</td><td>SPY</td><td>long</td><td>40</td><td>$760.00</td><td>$768.00</td><td class='pos'>$319.80</td></tr><tr><td>daily</td><td>daily_orb</td><td>SPY</td><td>short</td><td>33</td><td>$765.00</td><td>$768.30</td><td class='neg'>$-109.08</td></tr><tr><td>yolo</td><td>yolo</td><td>AAPL</td><td>long</td><td>50</td><td>$200.00</td><td>$210.00</td><td class='pos'>$499.70</td></tr><tr><td>daily</td><td>daily_orb</td><td>SPY</td><td>long</td><td>33</td><td>$769.00</td><td>$774.50</td><td class='pos'>$181.32</td></tr></table></div>
+
+<div class='footer'>Paper trading only. Not investment advice. Regulatory fees modelled per Alpaca's brokerage fee schedule.</div>
+</body></html>

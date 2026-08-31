@@ -1,0 +1,6 @@
+# Runtime data and cache — not committed
+data/
+__pycache__/
+*.pyc
+*.pyo
+.cache/
