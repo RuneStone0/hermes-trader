@@ -66,7 +66,8 @@ def _orb_setup(bars: list, equity: float) -> dict | None:
     if entry is None:
         return None
     stop = lo if side == "long" else hi
-    target = entry + 2 * rng if side == "long" else entry - 2 * rng
+    mult = config.DAILY["rr_multiple"]
+    target = entry + mult * rng if side == "long" else entry - mult * rng
     risk_dollars = equity * config.RISK_PCT_PER_TRADE
     shares = max(1, int(risk_dollars / rng))
     return {"entry": entry, "stop": stop, "target": target, "side": side,

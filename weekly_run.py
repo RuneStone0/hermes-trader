@@ -92,16 +92,17 @@ def main() -> None:
 
     # 3. Trend + pullback signal.
     setup = None
+    tgt = config.WEEKLY["target_atr"]
     if last > sma100 and last <= sma100 + atr14:          # uptrend, pulled back to SMA
         entry = last
         stop = entry - atr14
-        target = entry + 2 * atr14
+        target = entry + tgt * atr14
         setup = {"side": "long", "entry": entry, "stop": stop, "target": target,
                  "trend": "uptrend"}
     elif last < sma100 and last >= sma100 - atr14:        # downtrend, rallied to SMA
         entry = last
         stop = entry + atr14
-        target = entry - 2 * atr14
+        target = entry - tgt * atr14
         setup = {"side": "short", "entry": entry, "stop": stop, "target": target,
                  "trend": "downtrend"}
     if not setup:

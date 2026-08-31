@@ -57,7 +57,8 @@ def group_by_et_date(bars: list[dict]) -> dict[str, list[dict]]:
     return days
 
 
-def simulate_day(day_bars: list[dict], params: dict) -> dict | None:
+def simulate_day(day_bars: list[dict], params: dict, rr_mult: float,
+                 trail: float = 0.0) -> dict | None:
     orb = [b for b in day_bars if _et_hm(b["t"]) <= "10:00"]
     post = [b for b in day_bars if _et_hm(b["t"]) > "10:00"]
     if not orb or not post:
@@ -82,25 +83,42 @@ def simulate_day(day_bars: list[dict], params: dict) -> dict | None:
         return None
 
     stop = orb_low if side == "long" else orb_high
-    target = entry + 2 * rng if side == "long" else entry - 2 * rng
+    target = entry + rr_mult * rng if side == "long" else entry - rr_mult * rng
 
     exit_price = None
     exit_reason = None
-    for b in post[entry_idx:]:
-        if side == "long":
-            if b["l"] <= stop:
-                exit_price, exit_reason = stop, "stop"
-                break
-            if b["h"] >= target:
-                exit_price, exit_reason = target, "target"
-                break
-        else:
-            if b["h"] >= stop:
-                exit_price, exit_reason = stop, "stop"
-                break
-            if b["l"] <= target:
-                exit_price, exit_reason = target, "target"
-                break
+    if trail > 0:
+        trail_dist = trail * rng
+        best = entry
+        for b in post[entry_idx:]:
+            if side == "long":
+                best = max(best, b["h"])
+                tstop = best - trail_dist
+                if b["l"] <= tstop:
+                    exit_price, exit_reason = tstop, "trail"
+                    break
+            else:
+                best = min(best, b["l"])
+                tstop = best + trail_dist
+                if b["h"] >= tstop:
+                    exit_price, exit_reason = tstop, "trail"
+                    break
+    else:
+        for b in post[entry_idx:]:
+            if side == "long":
+                if b["l"] <= stop:
+                    exit_price, exit_reason = stop, "stop"
+                    break
+                if b["h"] >= target:
+                    exit_price, exit_reason = target, "target"
+                    break
+            else:
+                if b["h"] >= stop:
+                    exit_price, exit_reason = stop, "stop"
+                    break
+                if b["l"] <= target:
+                    exit_price, exit_reason = target, "target"
+                    break
     if exit_price is None:
         exit_price = post[-1]["c"]
         exit_reason = "flat"
@@ -122,6 +140,9 @@ def simulate_day(day_bars: list[dict], params: dict) -> dict | None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=120)
+    ap.add_argument("--rr", type=float, default=config.DAILY["rr_multiple"])
+    ap.add_argument("--trail", type=float, default=0.0,
+                    help="trailing-stop distance in units of range (0 = fixed target)")
     args = ap.parse_args()
 
     client = AlpacaClient("daily")
@@ -130,7 +151,8 @@ def main() -> None:
     print(f"Fetched {len(bars)} 5-min bars across {len(days)} trading days "
           f"({args.days} calendar days lookback)")
 
-    trades = [t for d in sorted(days) if (t := simulate_day(days[d], config.DAILY))]
+    trades = [t for d in sorted(days)
+              if (t := simulate_day(days[d], config.DAILY, args.rr, args.trail))]
 
     if not trades:
         print("No trades simulated (insufficient data?).")
@@ -149,9 +171,12 @@ def main() -> None:
                      if losses and sum(t["net"] for t in losses) != 0 else float("inf"))
     n_stop = sum(1 for t in trades if t["reason"] == "stop")
     n_target = sum(1 for t in trades if t["reason"] == "target")
+    n_trail = sum(1 for t in trades if t["reason"] == "trail")
     n_flat = sum(1 for t in trades if t["reason"] == "flat")
 
-    print(f"\n=== Daily ORB backtest (SPY, {len(trades)} trades over {len(days)} days) ===")
+    mode = f"trail {args.trail}x range" if args.trail > 0 else f"target {args.rr}x range"
+    print(f"\n=== Daily ORB backtest (SPY, {len(trades)} trades over {len(days)} days, "
+          f"{mode}) ===")
     print(f"Win rate:          {win_rate:.1%}")
     print(f"Avg win:           ${avg_win:>8.2f}")
     print(f"Avg loss:          ${avg_loss:>8.2f}")
@@ -160,7 +185,7 @@ def main() -> None:
     print(f"Gross P/L:         ${gross:>8.2f}")
     print(f"Total fees:        ${fees_tot:>8.2f}")
     print(f"NET P/L:           ${net:>8.2f}   (on $10k equity, {args.days}d)")
-    print(f"Exits: stop={n_stop}  target={n_target}  flat={n_flat}")
+    print(f"Exits: stop={n_stop}  target={n_target}  trail={n_trail}  flat={n_flat}")
     print(f"Avg R multiple:    {sum(t['r'] for t in trades)/len(trades):.2f}")
 
 

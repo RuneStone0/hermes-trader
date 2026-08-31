@@ -99,8 +99,8 @@ LLM_BASE_URL = "https://api.deepseek.com/v1"
 # --------------------------------------------------------------------------- #
 RISK_PCT_PER_TRADE = 0.01          # risk 1% of equity per trade
 MAX_DAILY_LOSS_PCT = 0.015         # stop trading for the day after -1.5% realized
-REWARD_RISK_TARGET = 2.0           # target 2:1 reward:risk (gross)
-MIN_NET_RR = 1.8                   # minimum acceptable reward:risk AFTER fees
+REWARD_RISK_TARGET = 1.5           # preferred reward:risk (NOT a hard requirement)
+MIN_NET_RR = 1.0                   # profitability floor: net reward >= net risk after fees
 
 # US market timezone (Alpaca clocks are in this tz)
 MARKET_TZ = "America/New_York"
@@ -112,7 +112,7 @@ DAILY = {
     "symbol": "SPY",
     "orb_start": "09:30",     # opening-range window (ET)
     "orb_end": "10:00",
-    "rr_multiple": 2.0,       # target = entry +/- 2 * opening range  (2:1)
+    "rr_multiple": 1.5,       # target = entry +/- 1.5 * opening range (attainable, profitable)
     "close_confirmation": True,  # require a CLOSE beyond the range, not just a wick
     "flat_by": "15:50",       # force flat before the close
     "max_trades_per_day": 1,
@@ -127,7 +127,7 @@ WEEKLY = {
     "atr_period": 14,
     "atr_timeframe": "1Day",
     "stop_atr": 1.0,
-    "target_atr": 2.0,
+    "target_atr": 1.5,
     "max_hold_days": 5,
     "max_positions": 1,
 }
