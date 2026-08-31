@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import config
 import db
 
-PORT = int(os.environ.get("PORT", "8080"))
+PORT = int(os.environ.get("PORT", "43210"))
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 START = time.time()
 

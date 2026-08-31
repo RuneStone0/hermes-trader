@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     environment:
       TRADER_HOME: /data
-      PORT: "8080"
+      PORT: "43210"
       LLM_MODEL: ${LLM_MODEL:-deepseek-v4-pro}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY in .env}
       ALPACA_DAILY_API_KEY: ${ALPACA_DAILY_API_KEY:?set ALPACA_DAILY_API_KEY in .env}
@@ -21,9 +21,8 @@ services:
     volumes:
       - trader-data:/data
     ports:
-      # LAN access for the dashboard (umbrel.local:1234) + loopback for the host-local monitor.
-      - "1234:8080"
-      - "127.0.0.1:8080:8080"
+      # LAN access for the dashboard (umbrel.local:43210).
+      - "43210:43210"
     logging:
       driver: json-file
       options:

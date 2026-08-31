@@ -40,7 +40,7 @@ def check() -> tuple[list[str], dict]:
             problems.append(f"container unhealthy/not running: {status_line or '(no output)'}")
 
     # 2. health endpoint
-    r = _ssh("curl -s -m 5 localhost:8080/health")
+    r = _ssh("curl -s -m 5 localhost:43210/health")
     try:
         h = json.loads(r.stdout or "{}")
         info["health"] = h.get("status", "unreachable")

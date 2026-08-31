@@ -22,11 +22,11 @@ curl -s localhost:8080/health
 ## Reviewing the dashboard
 
 The dashboard is read-only and unauthenticated, served on
-**`http://umbrel.local:1234`** (host port 1234 → container 8080). If the page
-doesn't load from your desktop, the host firewall is blocking the port — allow it:
+**`http://umbrel.local:43210`** (host port 43210). If the page doesn't load from
+your desktop, the host firewall is blocking the port — allow it:
 
 ```bash
-sudo ufw allow 1234/tcp    # or add port 1234 in umbrelOS Settings -> Firewall
+sudo ufw allow 43210/tcp    # or add port 43210 in umbrelOS Settings -> Firewall
 ```
 
 ## Updating (push new code, redeploy)
