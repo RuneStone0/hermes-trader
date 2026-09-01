@@ -132,13 +132,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send(200, "application/json", json.dumps(_health()).encode())
             return
-        # Everything else -> dashboard, regenerated fresh on each view.
         try:
             import dashboard
-            dashboard.main()
-        except Exception:
-            pass
-        html = config.DASHBOARD_PATH.read_bytes() if config.DASHBOARD_PATH.exists() else b"no data yet"
+            account = self.path.strip("/")
+            if account in ("daily", "weekly", "yolo"):
+                html = dashboard.build_account(account).encode()
+            else:
+                html = dashboard.build().encode()
+        except Exception as e:
+            html = f"dashboard error: {e}".encode()
         self._send(200, "text/html; charset=utf-8", html)
 
     def log_message(self, *args) -> None:
