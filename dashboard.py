@@ -12,10 +12,12 @@ Net P/L = gross P/L minus modelled regulatory fees. Self-contained HTML
 from __future__ import annotations
 
 import html
+import json
 from datetime import datetime, timezone
 
 import config
 import db
+import schedule
 
 ACCOUNTS = ("daily", "weekly", "yolo")
 _STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
@@ -57,6 +59,13 @@ tr:last-child td{border-bottom:none}
 .tab{padding:6px 14px;border-radius:8px;border:1px solid var(--border);color:var(--muted);text-decoration:none;font-size:13px;font-weight:500}
 .tab:hover{color:var(--text);border-color:var(--accent)}
 .tab.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+.trade{border-bottom:1px solid var(--border);padding:10px 4px}
+.trade summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.trade-body{padding:10px 0 4px 18px;font-size:13px}
+.dl{margin:4px 0}
+.lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.long{color:var(--pos)}.short{color:var(--neg)}
 """
 
 
@@ -183,6 +192,61 @@ def _events_rows(events) -> str:
     return "".join(out)
 
 
+def _parse_json(s):
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _decision_body(dj) -> str:
+    if not dj:
+        return "<div class='muted'>No decision summary recorded for this trade.</div>"
+    ctx = dj.get("context") or {}
+    rows = []
+    badge = _event_badge(dj.get("decision", ""))
+    if dj.get("size_multiplier") is not None:
+        badge += f" <span class='muted'>· size {dj['size_multiplier']}</span>"
+    rows.append(("Decision", badge))
+    if dj.get("rationale"):
+        rows.append(("Rationale", html.escape(str(dj["rationale"]))))
+    if ctx.get("technical"):
+        rows.append(("Setup", html.escape(str(ctx["technical"]))))
+    if ctx.get("market_regime"):
+        rows.append(("Regime", html.escape(str(ctx["market_regime"]))))
+    if ctx.get("risk_reward") is not None:
+        rr = str(ctx["risk_reward"])
+        if ctx.get("net_rr_after_fees") is not None:
+            rr += f" <span class='muted'>(net {ctx['net_rr_after_fees']} after fees)</span>"
+        rows.append(("Risk:reward", rr))
+    if ctx.get("recent_performance"):
+        rows.append(("Recent", html.escape(str(ctx["recent_performance"]))))
+    return "".join(f"<div class='dl'><span class='lbl'>{k}</span> {v}</div>" for k, v in rows)
+
+
+def _trade_details(rows) -> str:
+    if not rows:
+        return "<div class='muted' style='padding:10px'>No closed trades yet.</div>"
+    out = []
+    for r in rows:
+        pnl = r["net_pnl"] or 0
+        cls = "pos" if pnl > 0 else ("neg" if pnl < 0 else "")
+        side_cls = "long" if r["side"] == "long" else "short"
+        dj = _parse_json(r["decision_json"])
+        out.append(
+            f"<details class='trade'><summary>"
+            f"<span class='muted mono'>{_fmt_ts(r['exit_time'] or r['created_at'])}</span>"
+            f"<strong>{html.escape(r['symbol'])}</strong>"
+            f"<span class='{side_cls}'>{r['side']}</span> x{r['qty']:g}"
+            f"{_money(r['entry_price'])} → {_money(r['exit_price'])}"
+            f"<span class='{cls}'>{_money(pnl)}</span>"
+            f"</summary><div class='trade-body'>{_decision_body(dj)}</div></details>"
+        )
+    return "".join(out)
+
+
 def _nav(active: str) -> str:
     items = [("overview", "Overview", "/"), ("daily", "Daily", "/daily"),
              ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo")]
@@ -216,6 +280,7 @@ def _overview_body() -> str:
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
 
     acct_cards = []
+    now = datetime.now(timezone.utc)
     for a in ACCOUNTS:
         s = _stats([t for t in closed if t["account"] == a])
         le = db.last_event(a, _STRATEGY[a])
@@ -224,13 +289,15 @@ def _overview_body() -> str:
             last_line = (f"<div class='muted' style='font-size:11px;margin-top:6px'>"
                          f"{_event_badge(le['decision'])} "
                          f"{html.escape((le['reason'] or '')[:90])}</div>")
+        next_line = (f"<div class='muted' style='font-size:11px;margin-top:4px'>"
+                     f"next: {schedule.next_label(a, now)}</div>")
         acct_cards.append(
             f"<a class='acct' href='/{a}'>"
             f"<h3>{a.upper()}</h3>"
             f"<div class='big {('pos' if s['net'] > 0 else ('neg' if s['net'] < 0 else ''))}'>{_money(s['net'])}</div>"
             f"<div class='muted'>gross {_money(s['gross'])} · fees {_money(s['fees'])}</div>"
             f"<div class='muted'>{s['n']} trades · {s['win_rate']:.0%} win</div>"
-            f"{last_line}</a>"
+            f"{next_line}{last_line}</a>"
         )
 
     s_all = _stats(closed)
@@ -281,6 +348,7 @@ def _account_body(account: str) -> str:
 
     return f"""
 <h2>{account.upper()} <span class='muted' style='font-size:13px'>— {label}</span></h2>
+<div class='muted' style='margin:4px 0 0'>Next evaluation: {schedule.next_label(account)}</div>
 <div class='grid'>
 {_card("Net P/L", _money(s["net"]), f"gross {_money(s['gross'])} · fees {_money(s['fees'])}", sign=s["net"])}
 {_card("Closed trades", str(s["n"]))}
@@ -300,8 +368,7 @@ def _account_body(account: str) -> str:
 {_open_rows(open_t, with_account=False)}</table></div>
 
 <h2>Recent closed trades</h2>
-<div class='panel'><table><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
-{_closed_rows(recent, with_account=False)}</table></div>
+<div class='panel'>{_trade_details(recent)}</div>
 """
 
 

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS trades (
     order_id TEXT,
     client_order_id TEXT,
     note TEXT,
+    decision_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -70,9 +71,17 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the initial schema (safe on existing DBs)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
+    if "decision_json" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN decision_json TEXT")
 
 
 def insert_trade(**fields) -> int:

@@ -225,6 +225,12 @@ def main() -> None:
         rr_planned=rr["gross_rr"], stop_price=setup["stop"],
         target_price=setup["target"], order_id=order.get("id"),
         client_order_id=order.get("client_order_id"), note=decision["rationale"],
+        decision_json=json.dumps({
+            "decision": decision["decision"],
+            "rationale": decision["rationale"],
+            "size_multiplier": decision["size_multiplier"],
+            "context": ctx,
+        }),
     )
     st.update(decided=True, decision=decision["decision"], order_id=order.get("id"))
     _save_state(d, st)

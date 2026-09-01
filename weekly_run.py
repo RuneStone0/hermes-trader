@@ -175,6 +175,12 @@ def main() -> None:
         rr_planned=rr["gross_rr"], stop_price=setup["stop"],
         target_price=setup["target"], order_id=order.get("id"),
         client_order_id=order.get("client_order_id"), note=decision["rationale"],
+        decision_json=json.dumps({
+            "decision": decision["decision"],
+            "rationale": decision["rationale"],
+            "size_multiplier": decision["size_multiplier"],
+            "context": ctx,
+        }),
     )
     _save_state({"last_order_id": order.get("id"), "side": setup["side"],
                  "entry": setup["entry"], "placed_at": datetime.now(ET).isoformat()})

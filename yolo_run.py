@@ -137,6 +137,14 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
         stop_price=stop, target_price=target,
         order_id=order.get("id"), client_order_id=order.get("client_order_id"),
         note=str(a.get("rationale", ""))[:200] or "yolo open",
+        decision_json=json.dumps({
+            "decision": "open",
+            "rationale": str(a.get("rationale", "")),
+            "action": {k: a.get(k) for k in ("symbol", "side", "size_pct", "stop", "target")},
+            "context": {"equity": round(equity, 2),
+                        "concurrent_positions": len(positions),
+                        "max_risk_pct": config.YOLO["max_risk_pct"]},
+        }),
     )
     print(f"[yolo] placed order {order.get('id')}")
     db.log_event(ACCOUNT, "yolo", "go", f"open {side} {sym} x{qty}",
