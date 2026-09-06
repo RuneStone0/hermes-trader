@@ -12,7 +12,7 @@ LABELS = {"daily": "Daily ORB", "weekly": "Weekly pullback", "yolo": "YOLO"}
 SCHEDULES = {
     "daily":  {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 300},
     "weekly": {"kind": "times", "times": ["14:45"]},
-    "yolo":   {"kind": "times", "times": ["14:00", "17:00", "19:00"]},
+    "yolo":   {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 1800},
 }
 
 

@@ -32,7 +32,7 @@ JOBS = [
      "cmd": [sys.executable, "weekly_run.py"], "timeout": 180},
     {"name": "reconcile", "type": "interval", "interval_s": 600,
      "cmd": [sys.executable, "reconcile.py"], "timeout": 180},
-    {"name": "yolo", "type": "times", "times": ["14:00", "17:00", "19:00"],
+    {"name": "yolo", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 1800,
      "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],
      "cmd": [sys.executable, "self_improve.py"], "timeout": 300},

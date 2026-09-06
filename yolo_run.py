@@ -56,9 +56,15 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
     sym = str(a.get("symbol", "")).strip().upper()
     if not sym:
         return False
-    if sym not in config.YOLO["watchlist"]:
-        print(f"[yolo] reject {sym}: not in v1 watchlist")
-        db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: not in v1 watchlist")
+    # Freedom: allow ANY retail US equity/ETF — reject only crypto and options
+    # (crypto needs a separate data feed; options need a contract chain).
+    if "/" in sym:
+        print(f"[yolo] reject {sym}: crypto (BTC-only allowlist, separate feed)")
+        db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: crypto not supported")
+        return False
+    if len(sym) >= 21:
+        print(f"[yolo] reject {sym}: options not supported")
+        db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: options not supported")
         return False
     if sym in positions:
         print(f"[yolo] skip {sym}: already positioned")
@@ -220,6 +226,7 @@ def main() -> None:
             "low_30d": round(min(float(b["l"]) for b in bars), 2),
         }
 
+    open_map = {t["symbol"]: t for t in db.open_trades(ACCOUNT)}
     pos_ctx = [
         {
             "symbol": sym,
@@ -228,6 +235,7 @@ def main() -> None:
             "avg_entry": float(p["avg_entry_price"]),
             "market_value": float(p["market_value"]),
             "unrealized_pnl": float(p["unrealized_pl"]),
+            "entry_rationale": ((open_map[sym]["note"] or "") if sym in open_map else "")[:160],
         }
         for sym, p in positions.items()
     ]
@@ -239,13 +247,24 @@ def main() -> None:
         "win_rate": round(sum(1 for t in closed if (t["net_pnl"] or 0) > 0) / len(closed), 3)
         if closed else 0.0,
     }
+    recent_trades = [
+        {"symbol": t["symbol"], "side": t["side"], "net_pnl": t["net_pnl"],
+         "note": (t["note"] or "")[:120]}
+        for t in closed[-10:]
+    ]
+    lessons = ""
+    if config.LESSONS_PATH.exists():
+        lessons = config.LESSONS_PATH.read_text()[-1500:]
 
     system = (
         "You are the YOLO autonomous portfolio manager for a $10k Alpaca PAPER "
-        "account. Propose trades ONLY from the watchlist symbols provided. "
-        "Respect the safety floor: never exceed position/risk limits, and always "
-        "attach a stop-loss. Prefer 2:1 reward:risk. You may open, close, or hold. "
-        "Respond with ONLY a JSON object (no markdown):\n"
+        "account. You have WIDE freedom: trade ANY retail US equity or ETF (the "
+        "suggested_universe is only a starting point), any direction, any size "
+        "within the safety floor. Always attach a stop-loss. Prefer 2:1 "
+        "reward:risk but do not over-constrain yourself. LEARN from your own "
+        "recent_trades and lessons_learned: avoid repeating mistakes, reinforce "
+        "what has worked. You may open, close, or hold. Respond with ONLY a JSON "
+        "object (no markdown):\n"
         '{"actions":[{"action":"open|close|hold","symbol":"SPY","side":"buy|sell",'
         '"size_pct":0.05,"stop":"-1.5%","target":"+3%"}],"rationale":"<one sentence>"}'
     )
@@ -253,8 +272,10 @@ def main() -> None:
         "equity": round(equity, 2),
         "buying_power": round(buying_power, 2),
         "positions": pos_ctx,
-        "watchlist": watch,
+        "suggested_universe": watch,
         "recent_performance": perf,
+        "recent_trades": recent_trades,
+        "lessons_learned": lessons,
         "safety_floor": {
             "max_position_pct": config.YOLO["max_position_pct"],
             "max_risk_pct": config.YOLO["max_risk_pct"],
