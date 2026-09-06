@@ -3,7 +3,11 @@
 # Secrets are read from a sibling .env file (chmod 600, never committed).
 services:
   trader:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_DATE: ${GIT_DATE:-unknown}
     image: hermes-trader:latest
     container_name: hermes-trader
     restart: unless-stopped

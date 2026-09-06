@@ -11,6 +11,12 @@ ENV TRADER_HOME=/data \
     PYTHONUNBUFFERED=1 \
     PORT=43210
 
+# Build metadata — baked in by deploy.sh via --build-arg; shown in the footer.
+ARG GIT_COMMIT=unknown
+ARG GIT_DATE=unknown
+ENV GIT_COMMIT=$GIT_COMMIT \
+    GIT_DATE=$GIT_DATE
+
 WORKDIR /app
 COPY . /app
 

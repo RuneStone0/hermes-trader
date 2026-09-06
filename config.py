@@ -9,6 +9,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# App version (bumped manually on releases; shown in the dashboard footer).
+VERSION = "1.0.0"
+
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
 # so scripts behave identically regardless of the ambient HERMES_HOME.

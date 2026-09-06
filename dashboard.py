@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from datetime import datetime, timezone
 
 import config
@@ -265,13 +266,31 @@ def _open_details(rows) -> str:
 
 
 def _nav(active: str) -> str:
-    items = [("overview", "Overview", "/"), ("daily", "Daily", "/daily"),
-             ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo")]
+    items = [("overview", "Overview", "/"),
+             ("daily", "Daily", "/daily"),
+             ("weekly", "Weekly", "/weekly"),
+             ("yolo", "YOLO", "/yolo")]
     links = []
     for key, label, href in items:
         cls = "active" if key == active else ""
         links.append(f"<a class='tab {cls}' href='{href}'>{label}</a>")
     return f"<nav class='tabs'>{''.join(links)}</nav>"
+def _build_info() -> str:
+    """Version + commit + time-since-last-update for the dashboard footer."""
+    parts = [f"v{config.VERSION}"]
+    parts.append(f"commit {os.environ.get('GIT_COMMIT', 'unknown')}")
+    git_date = os.environ.get("GIT_DATE")
+    if git_date and git_date not in ("unknown", ""):
+        try:
+            dt = datetime.fromisoformat(git_date.replace("Z", "+00:00"))
+            delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+            days, seconds = delta.days, delta.seconds
+            hours, mins = seconds // 3600, (seconds % 3600) // 60
+            rel = f"{days}d {hours}h" if days else (f"{hours}h {mins}m" if hours else f"{mins}m")
+            parts.append(f"updated {rel} ago")
+        except (ValueError, TypeError):
+            pass
+    return " · ".join(parts)
 
 
 def _page(title: str, active: str, body: str) -> str:
@@ -285,7 +304,7 @@ def _page(title: str, active: str, body: str) -> str:
 <div class='muted' style='margin-top:4px'>Net P/L includes modelled regulatory fees (SEC / TAF / CAT) · generated {gen}</div>
 {_nav(active)}
 {body}
-<div class='footer'>Paper trading only. Not investment advice. Regulatory fees modelled per Alpaca's brokerage fee schedule.</div>
+<div class='footer'>Paper trading only. Not investment advice. Regulatory fees modelled per Alpaca's brokerage fee schedule.<br><span style='opacity:.65'>{_build_info()}</span></div>
 </body></html>"""
 
 
