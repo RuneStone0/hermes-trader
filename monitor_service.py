@@ -62,18 +62,30 @@ def check() -> tuple[list[str], dict]:
 
 def main() -> None:
     problems, info = check()
+
+    # Auto-recover: if the container is missing/unhealthy, try to bring it back.
+    recovery = ""
+    if "healthy" not in str(info.get("container", "")):
+        r = _ssh("cd /home/umbrel/trader && docker compose up -d 2>&1 | tail -2")
+        recovery = (r.stdout or r.stderr or "").strip() or "attempted"
+        problems, info = check()  # re-check after recovery
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"# Service status — {now}", "",
              f"- container: {info['container']}",
              f"- health: {info['health']}"]
+    if recovery:
+        lines.append(f"- auto-recovery: {recovery}")
     if info.get("recent_errors") and info["recent_errors"] != "none":
         lines.append(f"\nRecent log errors:\n```\n{info['recent_errors']}\n```")
     STATUS_PATH.write_text("\n".join(lines) + "\n")
 
     if problems:
         print("HERMES-TRADER SERVICE ALERT")
+        if recovery:
+            print(f"  - auto-recovery ran: {recovery}")
         for p in problems:
             print(f"  - {p}")
         if info.get("recent_errors") and info["recent_errors"] != "none":
