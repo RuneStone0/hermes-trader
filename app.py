@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
 import db
+from alpaca_rest import AlpacaClient
 
 PORT = int(os.environ.get("PORT", "43210"))
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,7 @@ JOBS = [
     {"name": "reconcile", "type": "interval", "interval_s": 600,
      "cmd": [sys.executable, "reconcile.py"], "timeout": 180},
     {"name": "yolo", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 1800,
-     "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
+     "market_gate": True, "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],
      "cmd": [sys.executable, "self_improve.py"], "timeout": 300},
 ]
@@ -45,6 +46,22 @@ def _now_utc() -> datetime:
 
 def _hm(dt: datetime) -> str:
     return dt.strftime("%H:%M")
+
+
+_market_clock = AlpacaClient("yolo")
+_market_cache: dict = {"ts": 0.0, "open": False}
+
+
+def _market_open() -> bool:
+    """Cached Alpaca market-open check (at most one API call per minute)."""
+    now = time.time()
+    if now - _market_cache["ts"] >= 60:
+        try:
+            _market_cache["open"] = bool(_market_clock.clock().get("is_open"))
+        except Exception:
+            _market_cache["open"] = False
+        _market_cache["ts"] = now
+    return _market_cache["open"]
 
 
 def should_run(job: dict, now: datetime, last: datetime | None) -> bool:
@@ -60,7 +77,11 @@ def should_run(job: dict, now: datetime, last: datetime | None) -> bool:
     if t == "window":
         if not (job["start"] <= _hm(now) < job["end"]):
             return False
-        return last is None or (now - last).total_seconds() >= job["interval_s"]
+        if last is None or (now - last).total_seconds() >= job["interval_s"]:
+            if job.get("market_gate") and not _market_open():
+                return False
+            return True
+        return False
     return False
 
 
