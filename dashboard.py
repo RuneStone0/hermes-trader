@@ -275,12 +275,25 @@ def _nav(active: str) -> str:
         cls = "active" if key == active else ""
         links.append(f"<a class='tab {cls}' href='{href}'>{label}</a>")
     return f"<nav class='tabs'>{''.join(links)}</nav>"
+def _read_build_file(name: str) -> str | None:
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), name)) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
 def _build_info() -> str:
-    """Version + commit + time-since-last-update for the dashboard footer."""
+    """Version + commit + time-since-last-update for the dashboard footer.
+
+    Commit/date are baked into the image at build time (commit.txt/date.txt);
+    env vars take precedence for manual/scripted builds.
+    """
     parts = [f"v{config.VERSION}"]
-    parts.append(f"commit {os.environ.get('GIT_COMMIT', 'unknown')}")
-    git_date = os.environ.get("GIT_DATE")
-    if git_date and git_date not in ("unknown", ""):
+    commit = os.environ.get("GIT_COMMIT") or _read_build_file("commit.txt") or "unknown"
+    parts.append(f"commit {commit}")
+    git_date = os.environ.get("GIT_DATE") or _read_build_file("date.txt")
+    if git_date:
         try:
             dt = datetime.fromisoformat(git_date.replace("Z", "+00:00"))
             delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)

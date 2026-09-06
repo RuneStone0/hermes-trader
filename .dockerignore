@@ -1,0 +1,15 @@
+# Keep secrets and runtime state out of the image build context.
+# (.git is intentionally NOT excluded — the Dockerfile's meta stage reads it to
+# bake the commit hash; the runtime stage only COPYs *.py so .git never ships.)
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.cache/
