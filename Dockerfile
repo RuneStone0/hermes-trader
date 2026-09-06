@@ -2,13 +2,26 @@
 # Talks to Alpaca (paper) and DeepSeek directly — no Hermes dependency.
 
 # Stage 1: extract git metadata (commit hash + date) baked into the image so the
-# dashboard footer can show version/commit/freshness. Works under both deploy.sh
-# and Portainer's git-stack auto-update (both provide the .git dir in the context).
+# dashboard footer can show version/commit/freshness.
+#
+# Two deploy paths:
+#   - Raw `docker compose` (deploy.sh): the build context includes .git, so read
+#     the local HEAD directly.
+#   - Portainer git-repository stack: Portainer clones the working tree WITHOUT
+#     .git into a hash-named dir, so fall back to `git ls-remote` against origin.
 FROM alpine/git AS meta
+ARG REPO_URL=https://github.com/RuneStone0/hermes-trader
+ARG REPO_REF=refs/heads/main
 WORKDIR /src
 COPY . /src
-RUN { git rev-parse --short HEAD 2>/dev/null || echo unknown; } > /commit.txt \
+RUN if git rev-parse --short HEAD >/dev/null 2>&1; then \
+        git rev-parse --short HEAD; \
+    else \
+        git ls-remote "$REPO_URL" "$REPO_REF" 2>/dev/null | cut -f1 | cut -c1-7; \
+    fi > /commit.txt \
     && { git log -1 --format=%cI 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ; } > /date.txt
+# Never ship an empty commit marker (e.g. ls-remote unreachable at build time).
+RUN [ -s /commit.txt ] || printf 'unknown' > /commit.txt
 
 # Stage 2: runtime.
 FROM python:3.11-slim
