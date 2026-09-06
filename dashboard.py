@@ -247,6 +247,23 @@ def _trade_details(rows) -> str:
     return "".join(out)
 
 
+def _open_details(rows) -> str:
+    if not rows:
+        return "<div class='muted' style='padding:10px'>No open positions.</div>"
+    out = []
+    for r in rows:
+        side_cls = "long" if r["side"] == "long" else "short"
+        dj = _parse_json(r["decision_json"])
+        out.append(
+            f"<details class='trade'><summary>"
+            f"<strong>{html.escape(r['symbol'])}</strong>"
+            f"<span class='{side_cls}'>{r['side']}</span> x{r['qty']:g}"
+            f"<span class='muted'>entry {_money(r['entry_price'])} · stop {_money(r['stop_price'])} · target {_money(r['target_price'])}</span>"
+            f"</summary><div class='trade-body'>{_decision_body(dj)}</div></details>"
+        )
+    return "".join(out)
+
+
 def _nav(active: str) -> str:
     items = [("overview", "Overview", "/"), ("daily", "Daily", "/daily"),
              ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo")]
@@ -364,8 +381,7 @@ def _account_body(account: str) -> str:
 <div class='panel'>{_curve(curve_pts)}</div>
 
 <h2>Open positions</h2>
-<div class='panel'><table><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Stop</th><th>Target</th></tr>
-{_open_rows(open_t, with_account=False)}</table></div>
+<div class='panel'>{_open_details(open_t)}</div>
 
 <h2>Recent closed trades</h2>
 <div class='panel'>{_trade_details(recent)}</div>
