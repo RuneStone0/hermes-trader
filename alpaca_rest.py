@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 import config
 
@@ -110,6 +111,18 @@ class AlpacaClient:
     def bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100,
              start: str | None = None, end: str | None = None,
              adjustment: str = "all") -> list:
+        # The free IEX data tier returns an empty first page (bars: null) for
+        # limit-only requests — back-compute a start date far enough back to
+        # cover `limit` bars when neither start nor end is given.
+        if start is None and end is None and limit:
+            bars_per_day = {
+                "1Min": 390, "5Min": 78, "15Min": 26, "30Min": 13, "1Hour": 7,
+                "1Day": 1,
+            }.get(timeframe, 1)
+            trading_days = (limit + bars_per_day - 1) // bars_per_day
+            calendar_days = int(trading_days * 1.7) + 3  # weekends/holidays + margin
+            start = (datetime.now(timezone.utc) - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
+
         params = [f"timeframe={timeframe}", f"limit={limit}", f"adjustment={adjustment}"]
         if start:
             params.append(f"start={start}")
