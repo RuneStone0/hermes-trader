@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import urllib.parse
 from datetime import datetime, timezone
 
 import config
@@ -26,6 +27,21 @@ _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback
                    "yolo": "YOLO"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149"}
+
+# Trading candlestick favicon (dark card + 3 candles, dashboard palette),
+# inlined as a data URI so the HTML stays fully self-contained.
+_FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+    "<rect width='64' height='64' rx='14' fill='#161b22'/>"
+    "<rect x='15.5' y='12' width='3' height='28' fill='#3fb950'/>"
+    "<rect x='10' y='22' width='14' height='10' rx='2' fill='#3fb950'/>"
+    "<rect x='30.5' y='20' width='3' height='32' fill='#f85149'/>"
+    "<rect x='25' y='30' width='14' height='14' rx='2' fill='#f85149'/>"
+    "<rect x='45.5' y='8' width='3' height='28' fill='#3fb950'/>"
+    "<rect x='40' y='18' width='14' height='10' rx='2' fill='#3fb950'/>"
+    "</svg>"
+)
+_FAVICON = "data:image/svg+xml," + urllib.parse.quote(_FAVICON_SVG)
 
 _CSS = """
 :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
@@ -312,6 +328,7 @@ def _page(title: str, active: str, body: str) -> str:
 <html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>{title} — Alpaca Trading</title>
+<link rel='icon' type='image/svg+xml' href='{_FAVICON}'>
 <style>{_CSS}</style></head><body>
 <h1>Alpaca Trading Dashboard <span class='badge'>PAPER</span></h1>
 <div class='muted' style='margin-top:4px'>Net P/L includes modelled regulatory fees (SEC / TAF / CAT) · generated {gen}</div>
