@@ -30,7 +30,10 @@ def _extract_json(content: str):
     except json.JSONDecodeError:
         s, e = content.find("{"), content.rfind("}")
         if s != -1 and e != -1 and e > s:
-            return json.loads(content[s:e + 1])
+            try:
+                return json.loads(content[s:e + 1])
+            except json.JSONDecodeError:
+                return {}
         return {}
 
 
