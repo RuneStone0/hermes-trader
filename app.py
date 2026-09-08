@@ -73,7 +73,11 @@ def should_run(job: dict, now: datetime, last: datetime | None) -> bool:
     if t == "times":
         if _hm(now) not in job["times"]:
             return False
-        return last is None or _hm(last) != _hm(now)
+        # Guard against double-firing within the same clock minute (loop ticks
+        # every 20s). Compare elapsed time, NOT minute-of-day strings: the old
+        # `_hm(last) != _hm(now)` check suppressed the next weekday's run
+        # entirely whenever the previous run happened at the same minute.
+        return last is None or (now - last).total_seconds() >= 60
     if t == "window":
         if not (job["start"] <= _hm(now) < job["end"]):
             return False

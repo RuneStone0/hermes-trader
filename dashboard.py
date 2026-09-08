@@ -1,13 +1,19 @@
 """Generate the dark-theme HTML dashboard(s) from trades.db.
 
 Two page types:
-  - overview ("/"): all-accounts summary, clickable per-account cards, equity
-    curve, and recent closed trades.
-  - account ("/daily", "/weekly", "/yolo"): one account's stats, its full
-    decision log, equity curve, and open/closed trades.
+  - overview ("/"): all-accounts summary, clickable per-account cards, open
+    positions, equity curve, and recent closed trades.
+  - account ("/daily", "/weekly", "/yolo"): one account's stats, its open
+    positions as a table (entry / stop / size incl. % of equity), equity curve,
+    recent closed trades, and a collapsed decision journal.
+
+Every position row — open or recently closed — carries a small info icon that
+expands the trade's decision-log detail (LLM rationale, setup, regime, risk)
+inline. The big decision journal is collapsed by default since the icons cover
+the per-trade "why".
 
 Net P/L = gross P/L minus modelled regulatory fees. Self-contained HTML
-(inline CSS + inline SVG, no CDN).
+(inline CSS + inline JS + inline SVG, no CDN).
 """
 from __future__ import annotations
 
@@ -43,6 +49,15 @@ _FAVICON_SVG = (
 )
 _FAVICON = "data:image/svg+xml," + urllib.parse.quote(_FAVICON_SVG)
 
+# Info-circle icon used as the per-position "why" button.
+_INFO_ICON = (
+    "<svg width='13' height='13' viewBox='0 0 16 16' fill='none' "
+    "xmlns='http://www.w3.org/2000/svg'>"
+    "<circle cx='8' cy='8' r='6.6' stroke='currentColor' stroke-width='1.4'/>"
+    "<path d='M8 7.1v3.6' stroke='currentColor' stroke-width='1.4' stroke-linecap='round'/>"
+    "<circle cx='8' cy='4.9' r='1.1' fill='currentColor'/></svg>"
+)
+
 _CSS = """
 :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
 --pos:#3fb950;--neg:#f85149;--accent:#58a6ff;}
@@ -62,7 +77,7 @@ h3{font-size:13px;color:var(--accent);margin-bottom:6px}
 .accts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:var(--text);display:block;transition:border-color .15s}
 .acct:hover{border-color:var(--accent)}
-.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-top:16px;overflow-x:auto}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:6px 6px;margin-top:16px;overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
 th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
@@ -76,18 +91,30 @@ tr:last-child td{border-bottom:none}
 .tab{padding:6px 14px;border-radius:8px;border:1px solid var(--border);color:var(--muted);text-decoration:none;font-size:13px;font-weight:500}
 .tab:hover{color:var(--text);border-color:var(--accent)}
 .tab.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
-.trade{border-bottom:1px solid var(--border);padding:10px 4px}
-.trade summary{cursor:pointer;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-.trade-body{padding:10px 0 4px 18px;font-size:13px}
 .dl{margin:4px 0}
 .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .long{color:var(--pos)}.short{color:var(--neg)}
+/* --- per-position "why" button + expanding detail row --- */
+.dbtn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:3px 5px;line-height:1;display:inline-flex;vertical-align:middle;transition:all .12s}
+.dbtn:hover{color:var(--accent);border-color:var(--accent)}
+.dbtn.on{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.12)}
+.drow td{padding:0;background:rgba(88,166,255,.03)}
+.ddetail{padding:12px 14px 14px 46px;font-size:12.5px;border-top:1px dashed var(--border)}
+.drow.hidden{display:none}
+/* --- decision journal (collapsed by default) --- */
+details.journal summary{cursor:pointer;user-select:none;display:inline-block;margin:28px 0 0;font-size:15px;font-weight:600}
+details.journal summary:hover{color:var(--accent)}
+details.journal .muted{font-weight:400;font-size:12px}
 """
 
 
 def _money(x) -> str:
     return "—" if x is None else f"${x:,.2f}"
+
+
+def _pct(x) -> str:
+    return "—" if x is None else f"{x:.1%}"
 
 
 def _stats(trades) -> dict:
@@ -140,42 +167,6 @@ def _curve(points, w: int = 920, h: int = 240) -> str:
     return f"<svg viewBox='0 0 {w} {h}' class='curve'>{zero}<path d='{d}'/></svg>"
 
 
-def _closed_rows(rows, with_account: bool = True) -> str:
-    cols = 8 if with_account else 6
-    if not rows:
-        return f"<tr><td colspan='{cols}' class='muted'>None yet.</td></tr>"
-    out = []
-    for r in rows:
-        pnl = r["net_pnl"] or 0
-        cls = "pos" if pnl > 0 else ("neg" if pnl < 0 else "")
-        acct = (f"<td>{html.escape(r['account'])}</td>"
-                f"<td class='muted'>{_STRATEGY_LABEL.get(r['strategy'], r['strategy'])}</td>") \
-            if with_account else ""
-        out.append(
-            f"<tr>{acct}<td>{html.escape(r['symbol'])}</td><td>{r['side']}</td><td>{r['qty']:g}</td>"
-            f"<td>{_money(r['entry_price'])}</td><td>{_money(r['exit_price'])}</td>"
-            f"<td class='{cls}'>{_money(pnl)}</td></tr>"
-        )
-    return "".join(out)
-
-
-def _open_rows(rows, with_account: bool = True) -> str:
-    cols = 8 if with_account else 6
-    if not rows:
-        return f"<tr><td colspan='{cols}' class='muted'>No open positions.</td></tr>"
-    out = []
-    for r in rows:
-        acct = (f"<td>{html.escape(r['account'])}</td>"
-                f"<td class='muted'>{_STRATEGY_LABEL.get(r['strategy'], r['strategy'])}</td>") \
-            if with_account else ""
-        out.append(
-            f"<tr>{acct}<td>{html.escape(r['symbol'])}</td><td>{r['side']}</td><td>{r['qty']:g}</td>"
-            f"<td>{_money(r['entry_price'])}</td><td>{_money(r['stop_price'])}</td>"
-            f"<td>{_money(r['target_price'])}</td></tr>"
-        )
-    return "".join(out)
-
-
 def _fmt_ts(s: str) -> str:
     try:
         dt = datetime.fromisoformat((s or "").replace("Z", "+00:00"))
@@ -188,7 +179,7 @@ def _event_badge(decision: str) -> str:
     color = _DECISION_COLORS.get(decision, "#8b949e")
     return (f"<span style='display:inline-block;padding:1px 8px;border-radius:999px;"
             f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'>"
-            f"{decision.upper()}</span>")
+            f"{html.escape(str(decision)).upper()}</span>")
 
 
 def _events_rows(events) -> str:
@@ -218,66 +209,173 @@ def _parse_json(s):
         return None
 
 
-def _decision_body(dj) -> str:
-    if not dj:
-        return "<div class='muted'>No decision summary recorded for this trade.</div>"
-    ctx = dj.get("context") or {}
-    rows = []
-    badge = _event_badge(dj.get("decision", ""))
-    if dj.get("size_multiplier") is not None:
-        badge += f" <span class='muted'>· size {dj['size_multiplier']}</span>"
-    rows.append(("Decision", badge))
-    if dj.get("rationale"):
-        rows.append(("Rationale", html.escape(str(dj["rationale"]))))
+# --- trade math helpers ----------------------------------------------------- #
+
+def _mult(r) -> int:
+    return 100 if (r["asset_class"] == "option") else 1
+
+
+def _rr_planned(r) -> float | None:
+    if r["rr_planned"] is not None:
+        return float(r["rr_planned"])
+    entry, stop, tgt = r["entry_price"], r["stop_price"], r["target_price"]
+    if entry and stop and tgt:
+        if r["side"] == "long":
+            return (tgt - entry) / (entry - stop) if entry != stop else None
+        return (entry - tgt) / (stop - entry) if stop != entry else None
+    return None
+
+
+def _notional(r) -> float | None:
+    if not r["entry_price"]:
+        return None
+    return float(r["qty"]) * _mult(r) * float(r["entry_price"])
+
+
+def _risk_usd(r) -> float | None:
+    if not r["entry_price"] or not r["stop_price"]:
+        return None
+    return float(r["qty"]) * _mult(r) * abs(float(r["entry_price"]) - float(r["stop_price"]))
+
+
+def _fraction(r, eq: float | None, usd: float | None) -> float | None:
+    return usd / eq if (eq and usd is not None) else None
+
+
+def _dbtn(on_row_id: int) -> str:
+    return (f"<button class='dbtn' type='button' title='Show decision log' "
+            f"aria-label='Show decision log' aria-expanded='false'>{_INFO_ICON}</button>")
+
+
+def _detail_row_html(r, eq: float | None, colspan: int) -> str:
+    """Expanded decision-log content shown when a position's icon is clicked."""
+    dj = _parse_json(r["decision_json"])
+    ctx = (dj or {}).get("context") or {}
+    rows: list[tuple[str, str]] = []
+
+    # Position math first: risk $ and size $ (+ % of equity when known).
+    math_bits = []
+    risk = _risk_usd(r)
+    if risk is not None:
+        risk_txt = f"Risk {_money(risk)}"
+        fr = _fraction(r, eq, risk)
+        if fr is not None:
+            risk_txt += f" ({fr:.2%} of equity)"
+        math_bits.append(risk_txt)
+    notional = _notional(r)
+    if notional is not None:
+        size_txt = f"Size {_money(notional)}"
+        fr = _fraction(r, eq, notional)
+        if fr is not None:
+            size_txt += f" ({fr:.2%} of equity)"
+        math_bits.append(size_txt)
+    rr = _rr_planned(r)
+    if rr is not None:
+        math_bits.append(f"Planned R:R {rr:g}")
+    if math_bits:
+        rows.append(("Position", " · ".join(math_bits)))
+
+    decision = (dj or {}).get("decision")
+    if decision:
+        badge = _event_badge(decision)
+        if (dj or {}).get("size_multiplier") is not None:
+            badge += f" <span class='muted'>· size {dj['size_multiplier']:g}</span>"
+        rows.append(("Decision", badge))
+
+    rationale = (dj or {}).get("rationale")
+    if rationale:
+        rows.append(("Rationale", html.escape(str(rationale))))
+    elif r["note"]:
+        rows.append(("Rationale", html.escape(str(r["note"]))))
+
     if ctx.get("technical"):
         rows.append(("Setup", html.escape(str(ctx["technical"]))))
     if ctx.get("market_regime"):
         rows.append(("Regime", html.escape(str(ctx["market_regime"]))))
     if ctx.get("risk_reward") is not None:
-        rr = str(ctx["risk_reward"])
+        rr_txt = str(ctx["risk_reward"])
         if ctx.get("net_rr_after_fees") is not None:
-            rr += f" <span class='muted'>(net {ctx['net_rr_after_fees']} after fees)</span>"
-        rows.append(("Risk:reward", rr))
+            rr_txt += f" <span class='muted'>(net {ctx['net_rr_after_fees']} after fees)</span>"
+        rows.append(("Risk:reward", rr_txt))
     if ctx.get("recent_performance"):
         rows.append(("Recent", html.escape(str(ctx["recent_performance"]))))
-    return "".join(f"<div class='dl'><span class='lbl'>{k}</span> {v}</div>" for k, v in rows)
+
+    when = r["entry_time"] or r["created_at"]
+    if when:
+        rows.append(("Opened", _fmt_ts(when)))
+
+    body = "".join(f"<div class='dl'><span class='lbl'>{k}</span> {v}</div>" for k, v in rows)
+    if not body:
+        body = "<div class='muted'>No decision summary recorded for this trade.</div>"
+    return f"<tr class='drow hidden'><td colspan='{colspan}'><div class='ddetail'>{body}</div></td></tr>"
 
 
-def _trade_details(rows) -> str:
+# --- open positions table --------------------------------------------------- #
+
+_OPEN_TH = ("<tr><th></th><th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
+            "<th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
+
+
+def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
+    ncol = 10 if with_account else 9
     if not rows:
-        return "<div class='muted' style='padding:10px'>No closed trades yet.</div>"
+        return f"<tr><td colspan='{ncol}' class='muted'>No open positions.</td></tr>"
+    out = []
+    for r in rows:
+        side_cls = "long" if r["side"] == "long" else "short"
+        eq_acct = eq.get(r["account"])
+        acct = ""
+        if with_account:
+            acct = (f"<td><a class='tab' style='padding:1px 8px' href='/{r['account']}'>"
+                    f"{html.escape(r['account'])}</a></td>")
+        notional = _notional(r)
+        size_txt = _money(notional) if notional is not None else "—"
+        nf = _fraction(r, eq_acct, notional)
+        if nf is not None:
+            size_txt += f" <span class='muted'>({nf:.1%})</span>"
+        rr = _rr_planned(r)
+        out.append(
+            f"<tr><td>{_dbtn(r['id'])}</td>{acct}"
+            f"<td><strong>{html.escape(r['symbol'])}</strong></td>"
+            f"<td class='{side_cls}'>{html.escape(r['side'])}</td>"
+            f"<td class='mono'>{r['qty']:g}</td>"
+            f"<td>{size_txt}</td>"
+            f"<td>{_money(r['entry_price'])}</td>"
+            f"<td>{_money(r['stop_price'])}</td>"
+            f"<td>{_money(r['target_price'])}</td>"
+            f"<td>{rr if rr is None else f'{rr:g}'}</td></tr>"
+        )
+        colspan = 10 if with_account else 9
+        out.append(_detail_row_html(r, eq_acct, colspan))
+    return "".join(out)
+
+
+# --- closed trades table ---------------------------------------------------- #
+
+def _closed_rows(rows, with_account: bool = True) -> str:
+    ncol = 10 if with_account else 8
+    if not rows:
+        return f"<tr><td colspan='{ncol}' class='muted'>None yet.</td></tr>"
     out = []
     for r in rows:
         pnl = r["net_pnl"] or 0
         cls = "pos" if pnl > 0 else ("neg" if pnl < 0 else "")
         side_cls = "long" if r["side"] == "long" else "short"
-        dj = _parse_json(r["decision_json"])
+        acct = ""
+        if with_account:
+            acct = (f"<td>{html.escape(r['account'])}</td>"
+                    f"<td class='muted'>{_STRATEGY_LABEL.get(r['strategy'], r['strategy'])}</td>")
         out.append(
-            f"<details class='trade'><summary>"
-            f"<span class='muted mono'>{_fmt_ts(r['exit_time'] or r['created_at'])}</span>"
-            f"<strong>{html.escape(r['symbol'])}</strong>"
-            f"<span class='{side_cls}'>{r['side']}</span> x{r['qty']:g}"
-            f"{_money(r['entry_price'])} → {_money(r['exit_price'])}"
-            f"<span class='{cls}'>{_money(pnl)}</span>"
-            f"</summary><div class='trade-body'>{_decision_body(dj)}</div></details>"
+            f"<tr><td class='muted'>{_fmt_ts(r['exit_time'] or r['created_at'])}</td>"
+            f"<td>{_dbtn(r['id'])}</td>{acct}"
+            f"<td><strong>{html.escape(r['symbol'])}</strong></td>"
+            f"<td class='{side_cls}'>{html.escape(r['side'])}</td>"
+            f"<td class='mono'>{r['qty']:g}</td>"
+            f"<td>{_money(r['entry_price'])}</td>"
+            f"<td>{_money(r['exit_price'])}</td>"
+            f"<td class='{cls}'>{_money(pnl)}</td></tr>"
         )
-    return "".join(out)
-
-
-def _open_details(rows) -> str:
-    if not rows:
-        return "<div class='muted' style='padding:10px'>No open positions.</div>"
-    out = []
-    for r in rows:
-        side_cls = "long" if r["side"] == "long" else "short"
-        dj = _parse_json(r["decision_json"])
-        out.append(
-            f"<details class='trade'><summary>"
-            f"<strong>{html.escape(r['symbol'])}</strong>"
-            f"<span class='{side_cls}'>{r['side']}</span> x{r['qty']:g}"
-            f"<span class='muted'>entry {_money(r['entry_price'])} · stop {_money(r['stop_price'])} · target {_money(r['target_price'])}</span>"
-            f"</summary><div class='trade-body'>{_decision_body(dj)}</div></details>"
-        )
+        out.append(_detail_row_html(r, None, ncol))
     return "".join(out)
 
 
@@ -291,6 +389,8 @@ def _nav(active: str) -> str:
         cls = "active" if key == active else ""
         links.append(f"<a class='tab {cls}' href='{href}'>{label}</a>")
     return f"<nav class='tabs'>{''.join(links)}</nav>"
+
+
 def _read_build_file(name: str) -> str | None:
     try:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), name)) as f:
@@ -335,7 +435,28 @@ def _page(title: str, active: str, body: str) -> str:
 {_nav(active)}
 {body}
 <div class='footer'>Paper trading only. Not investment advice. Regulatory fees modelled per Alpaca's brokerage fee schedule.<br><span style='opacity:.65'>{_build_info()}</span></div>
+<script>
+document.querySelectorAll('button.dbtn').forEach(function(b){{
+  b.addEventListener('click', function(){{
+    var tr = b.closest('tr');
+    var dr = tr ? tr.nextElementSibling : null;
+    if (dr && dr.classList.contains('drow')) {{
+      var open = dr.classList.toggle('hidden') === false;
+      b.classList.toggle('on', open);
+      b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }}
+  }});
+}});
+</script>
 </body></html>"""
+
+
+def _open_positions_block(rows, eq: dict, with_account: bool = False) -> str:
+    th = _OPEN_TH
+    if with_account:
+        th = ("<tr><th></th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
+              "<th>Size</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
+    return f"<div class='panel'><table>{th}{_open_rows(rows, eq, with_account)}</table></div>"
 
 
 def _overview_body() -> str:
@@ -344,6 +465,7 @@ def _overview_body() -> str:
     closed = [t for t in all_t if t["status"] == "closed"]
     open_t = db.open_trades()
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
+    eq = db.account_equity()
 
     acct_cards = []
     now = datetime.now(timezone.utc)
@@ -383,14 +505,17 @@ def _overview_body() -> str:
 {_card("Open positions", str(len(open_t)))}
 </div>
 
+<h2>Open positions <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+{_open_positions_block(open_t, eq, with_account=True)}
+
 <h2>Accounts</h2>
 <div class='accts'>{''.join(acct_cards)}</div>
 
 <h2>Equity curve (cumulative net P/L)</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
 
-<h2>Recent closed trades</h2>
-<div class='panel'><table><tr><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
+<h2>Recent closed trades <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+<div class='panel'><table><tr><th>Closed</th><th></th><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
 {_closed_rows(recent)}</table></div>
 """
 
@@ -402,6 +527,7 @@ def _account_body(account: str) -> str:
     open_t = [t for t in trades if t["status"] == "open"]
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
     events = db.recent_events(100, account=account)
+    eq = db.account_equity()
 
     s = _stats(closed)
     curve_pts, cum = [], 0.0
@@ -422,18 +548,20 @@ def _account_body(account: str) -> str:
 {_card("Open positions", str(len(open_t)))}
 </div>
 
-<h2>Decision log</h2>
-<div class='panel'><table><tr><th>Time</th><th>Decision</th><th>Reason</th></tr>
-{_events_rows(events)}</table></div>
+<h2>Open positions <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+{_open_positions_block(open_t, eq)}
 
 <h2>Equity curve</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
 
-<h2>Open positions</h2>
-<div class='panel'>{_open_details(open_t)}</div>
+<h2>Recent closed trades <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+<div class='panel'><table><tr><th>Closed</th><th></th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
+{_closed_rows(recent, with_account=False)}</table></div>
 
-<h2>Recent closed trades</h2>
-<div class='panel'>{_trade_details(recent)}</div>
+<details class='journal'><summary>Decision journal <span class='muted'>— every go / no-go / skip / error this bot logged (latest {len(events)})</span></summary>
+<div class='panel'><table><tr><th>Time</th><th>Decision</th><th>Reason</th></tr>
+{_events_rows(events)}</table></div>
+</details>
 """
 
 

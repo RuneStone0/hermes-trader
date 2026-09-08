@@ -36,6 +36,13 @@ def _ts(s: str) -> datetime | None:
 
 def reconcile_account(account: str) -> None:
     client = AlpacaClient(account)
+    # Snapshot equity for the dashboard's position-size % column (cheap, 10-min cadence).
+    try:
+        acct = client.account()
+        db.save_account_state(account, equity=float(acct.get("equity") or 0.0))
+    except (AlpacaError, TypeError, ValueError):
+        pass
+
     positions = {p["symbol"]: p for p in client.positions()}
 
     fills = client._request("GET", "/v2/account/activities?activity_types=FILL&page_size=100&direction=desc")

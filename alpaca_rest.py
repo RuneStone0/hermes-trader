@@ -80,8 +80,19 @@ class AlpacaClient:
     def cancel_all(self) -> list:
         return self._request("DELETE", "/v2/orders")
 
+    def cancel_order(self, order_id: str) -> dict:
+        return self._request("DELETE", f"/v2/orders/{order_id}")
+
     def submit_order(self, order: dict) -> dict:
         return self._request("POST", "/v2/orders", body=order)
+
+    def order(self, order_id: str) -> dict:
+        return self._request("GET", f"/v2/orders/{order_id}")
+
+    def orders_all(self, limit: int = 100) -> list:
+        """Recent orders across ALL statuses. NOTE: ?status=open silently omits
+        'held' bracket legs — never use it for coverage/protection scans."""
+        return self._request("GET", f"/v2/orders?status=all&limit={int(limit)}&direction=desc")
 
     def bracket_order(self, symbol: str, qty: float, side: str,
                       stop_price: float, target_price: float,
@@ -108,6 +119,23 @@ class AlpacaClient:
         return self.submit_order(order)
 
     # -- market data -------------------------------------------------------- #
+    def latest_trade(self, symbol: str) -> dict | None:
+        """Live last-trade for a symbol (data host, free tier OK).
+
+        Returns {'price': float, 'time': str} or None (unknown symbol / feed
+        gap). This is the price Alpaca brackets are validated against, so it —
+        NOT the last daily close — is the correct execution reference."""
+        try:
+            r = self._request("GET", f"/v2/stocks/{symbol}/trades/latest",
+                              base=self.data_base_url)
+            t = (r or {}).get("trade") or {}
+            px = t.get("p")
+            if px is None:
+                return None
+            return {"price": float(px), "time": t.get("t")}
+        except AlpacaError:
+            return None
+
     def bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100,
              start: str | None = None, end: str | None = None,
              adjustment: str = "all") -> list:
@@ -122,15 +150,30 @@ class AlpacaClient:
             trading_days = (limit + bars_per_day - 1) // bars_per_day
             calendar_days = int(trading_days * 1.7) + 3  # weekends/holidays + margin
             start = (datetime.now(timezone.utc) - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
+            # Second free-tier quirk: with `start` set, the API returns bars in
+            # ascending order and truncates to the FIRST `limit` bars of the
+            # window — so a window holding more bars than `limit` silently drops
+            # the MOST RECENT data (indicators then run on stale closes). The
+            # margin above makes the window ~1.2x `limit`, so over-request until
+            # the whole window fits, then slice the tail back to `limit` below.
+            req_limit = min(
+                10000,
+                int(calendar_days * 0.72 * bars_per_day) + bars_per_day + 5,
+            )
+        else:
+            req_limit = limit
 
-        params = [f"timeframe={timeframe}", f"limit={limit}", f"adjustment={adjustment}"]
+        params = [f"timeframe={timeframe}", f"limit={req_limit}", f"adjustment={adjustment}"]
         if start:
             params.append(f"start={start}")
         if end:
             params.append(f"end={end}")
         qs = "&".join(params)
-        return self._request("GET", f"/v2/stocks/{symbol}/bars?{qs}",
+        data = self._request("GET", f"/v2/stocks/{symbol}/bars?{qs}",
                              base=self.data_base_url)
+        if req_limit > limit and data.get("bars"):
+            data["bars"] = data["bars"][-limit:]  # keep the newest `limit`
+        return data
 
     def clock(self) -> dict:
         return self._request("GET", "/v2/clock")

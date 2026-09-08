@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_account ON events(account);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+
+CREATE TABLE IF NOT EXISTS account_state (
+    account TEXT PRIMARY KEY,
+    equity REAL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -186,5 +192,33 @@ def last_event(account: str, strategy: str) -> sqlite3.Row | None:
             "SELECT * FROM events WHERE account=? AND strategy=? ORDER BY id DESC LIMIT 1",
             (account, strategy),
         ).fetchone()
+    finally:
+        conn.close()
+
+
+def save_account_state(account: str, equity: float | None = None) -> None:
+    """Upsert a broker snapshot (equity) for an account.
+
+    Written by reconcile (every 10 min) so the dashboard can express position
+    size as a % of portfolio equity without hitting the broker per page view.
+    """
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO account_state (account, equity, updated_at) "
+            "VALUES (?,?,?)",
+            (account, equity, _now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def account_equity() -> dict[str, float]:
+    """Latest known equity per account: {'daily': 9994.69, ...}."""
+    conn = connect()
+    try:
+        return {r["account"]: r["equity"] for r in conn.execute(
+            "SELECT account, equity FROM account_state WHERE equity IS NOT NULL")}
     finally:
         conn.close()
