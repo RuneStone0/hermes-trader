@@ -289,6 +289,10 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
     elif r["note"]:
         rows.append(("Rationale", html.escape(str(r["note"]))))
 
+    close_rat = (dj or {}).get("close_rationale")
+    if close_rat:
+        rows.append(("Exit reason", html.escape(str(close_rat))))
+
     if ctx.get("technical"):
         rows.append(("Setup", html.escape(str(ctx["technical"]))))
     if ctx.get("market_regime"):

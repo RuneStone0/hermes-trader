@@ -63,10 +63,15 @@ def _ref_price(client: AlpacaClient, sym: str) -> float | None:
     return float(bars[-1]["c"]) if bars else None
 
 
-def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
+def _open_action(client, a, equity, buying_power, positions, dry_run,
+                 plan_rationale: str = "", snapshot: dict | None = None) -> bool:
     sym = str(a.get("symbol", "")).strip().upper()
     if not sym:
         return False
+    # The why behind this specific action: per-action rationale from the LLM,
+    # falling back to the plan-level sentence. Persisted so the decision
+    # journal (and the self-improvement loop) can learn from it.
+    rationale = str(a.get("rationale") or plan_rationale or "").strip()
     # Freedom: allow ANY retail US equity/ETF — reject only crypto and options
     # (crypto needs a separate data feed; options need a contract chain).
     if "/" in sym:
@@ -152,7 +157,8 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
         return False
 
     print(f"[yolo] OPEN {side} {sym} x{qty} ref={ref:.2f} stop={stop:.2f} "
-          f"target={target:.2f} notional~${qty * ref:,.0f}")
+          f"target={target:.2f} notional~${qty * ref:,.0f}"
+          + (f" | {rationale[:120]}" if rationale else ""))
     if dry_run:
         return True
 
@@ -163,36 +169,65 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
         db.log_event(ACCOUNT, "yolo", "error", f"{sym}: order error: {e}")
         return False
 
+    # Risk geometry for the journal (dashboard R:R column + detail panel).
+    risk_dist = abs(ref - stop)
+    reward_dist = abs(target - ref)
+    rr = round(reward_dist / risk_dist, 2) if risk_dist > 0 else None
+
+    ctx = {
+        "equity": round(equity, 2),
+        "concurrent_positions": len(positions),
+        "max_position_pct": config.YOLO["max_position_pct"],
+        "max_risk_pct": config.YOLO["max_risk_pct"],
+        "risk": {"entry_ref": round(ref, 4), "risk_dist": round(risk_dist, 4),
+                 "reward_dist": round(reward_dist, 4), "rr": rr},
+    }
+    if snapshot:
+        ctx["symbol_snapshot"] = snapshot
+        # Dashboard "Setup" row: the exact data the LLM saw when it decided.
+        try:
+            ctx["technical"] = (
+                f"{sym} live {snapshot['last']:.2f} · "
+                f"last_close {snapshot['last_close']:.2f} · "
+                f"5d {snapshot.get('chg_5d_pct')}% · "
+                f"30d {snapshot.get('chg_30d_pct')}% · "
+                f"30d range {snapshot.get('low_30d')}–{snapshot.get('high_30d')}")
+        except (KeyError, TypeError):
+            pass
+
     db.insert_trade(
         account=ACCOUNT, strategy="yolo", symbol=sym,
         asset_class="etf" if sym in ETF_SYMBOLS else "equity",
         side="long" if long else "short", qty=qty,
-        entry_price=ref, status="open", rr_planned=None,
+        entry_price=ref, status="open", rr_planned=rr,
         stop_price=stop, target_price=target,
         order_id=order.get("id"), client_order_id=order.get("client_order_id"),
-        note=str(a.get("rationale", ""))[:200] or "yolo open",
+        note=rationale[:200] or "yolo open",
         decision_json=json.dumps({
             "decision": "open",
-            "rationale": str(a.get("rationale", "")),
+            "rationale": rationale,
+            "rationale_source": ("llm_action" if a.get("rationale")
+                                 else ("llm_plan" if plan_rationale else "")),
             "action": {k: a.get(k) for k in ("symbol", "side", "size_pct", "stop", "target")},
-            "context": {"equity": round(equity, 2),
-                        "concurrent_positions": len(positions),
-                        "max_risk_pct": config.YOLO["max_risk_pct"]},
+            "context": ctx,
         }),
     )
     print(f"[yolo] placed order {order.get('id')}")
     db.log_event(ACCOUNT, "yolo", "go", f"open {side} {sym} x{qty}",
-                 detail=(f"ref={ref:.2f} stop={stop:.2f} target={target:.2f} | "
-                         f"{str(a.get('rationale', ''))[:200]}"))
+                 detail=(f"ref={ref:.2f} stop={stop:.2f} target={target:.2f}"
+                         + (f" | {rationale[:200]}" if rationale else "")))
     return True
 
 
-def _close_action(client, a, positions, dry_run) -> bool:
+def _close_action(client, a, positions, dry_run,
+                  plan_rationale: str = "") -> bool:
     sym = str(a.get("symbol", "")).strip().upper()
     if sym not in positions:
         return False
-    print(f"[yolo] CLOSE {sym}")
-    db.log_event(ACCOUNT, "yolo", "exit", f"close {sym}")
+    rationale = str(a.get("rationale") or plan_rationale or "").strip()
+    print(f"[yolo] CLOSE {sym}" + (f" | {rationale[:120]}" if rationale else ""))
+    db.log_event(ACCOUNT, "yolo", "exit", f"close {sym}",
+                 detail=(rationale[:200] or None))
     if dry_run:
         return True
     try:
@@ -201,6 +236,23 @@ def _close_action(client, a, positions, dry_run) -> bool:
         print(f"[yolo] close error {sym}: {e}")
         db.log_event(ACCOUNT, "yolo", "error", f"{sym}: close error: {e}")
         return False
+    # Stash the exit reasoning on the trade row so the closed-trade journal
+    # shows the full arc: why it was opened AND why it was closed.
+    try:
+        row = next((t for t in db.open_trades(ACCOUNT) if t["symbol"] == sym), None)
+        if row is not None:
+            dj = {}
+            if row["decision_json"]:
+                try:
+                    dj = json.loads(row["decision_json"])
+                except (json.JSONDecodeError, TypeError):
+                    dj = {}
+            dj["close_rationale"] = rationale
+            dj["close_rationale_source"] = ("llm_action" if a.get("rationale")
+                                            else ("llm_plan" if plan_rationale else "llm_close"))
+            db.update_trade(row["id"], decision_json=json.dumps(dj))
+    except Exception as e:
+        print(f"[yolo] close rationale not saved {sym}: {e}")
     return True
 
 
@@ -296,10 +348,14 @@ def main() -> None:
         "within the safety floor. Always attach a stop-loss. Prefer 2:1 "
         "reward:risk but do not over-constrain yourself. LEARN from your own "
         "recent_trades and lessons_learned: avoid repeating mistakes, reinforce "
-        "what has worked. You may open, close, or hold. Respond with ONLY a JSON "
-        "object (no markdown):\n"
+        "what has worked. You may open, close, or hold. EVERY action must carry "
+        "its OWN concise rationale (1-2 sentences: the thesis, why now, what "
+        "would invalidate it) — the decision journal and your future self learn "
+        "from it, so no bare orders. Respond with ONLY a JSON object (no "
+        "markdown):\n"
         '{"actions":[{"action":"open|close|hold","symbol":"SPY","side":"buy|sell",'
-        '"size_pct":0.05,"stop":"-1.5%","target":"+3%"}],"rationale":"<one sentence>"}'
+        '"size_pct":0.05,"stop":"-1.5%","target":"+3%","rationale":"<1-2 sentences>"}],'
+        '"rationale":"<one sentence plan summary>"}'
     )
     user = json.dumps({
         "equity": round(equity, 2),
@@ -336,15 +392,22 @@ def main() -> None:
         return
 
     executed = 0
+    holds = []
     for a in actions:
         if not isinstance(a, dict):
             continue
         action = str(a.get("action", "")).strip().lower()
         try:
             if action == "close":
-                ok = _close_action(client, a, positions, args.dry_run)
+                ok = _close_action(client, a, positions, args.dry_run,
+                                   plan_rationale=rationale)
             elif action == "open":
-                ok = _open_action(client, a, equity, buying_power, positions, args.dry_run)
+                ok = _open_action(client, a, equity, buying_power, positions,
+                                  args.dry_run, plan_rationale=rationale,
+                                  snapshot=watch.get(str(a.get("symbol", "")).strip().upper()))
+            elif action == "hold":
+                holds.append(a)
+                ok = False
             else:
                 ok = False
         except Exception as e:
@@ -352,6 +415,14 @@ def main() -> None:
             ok = False
         if ok:
             executed += 1
+
+    # A pure-hold plan is a real decision too — journal it (dedup refreshes the
+    # timestamp so the log doesn't flood every 30 min).
+    if executed == 0 and holds:
+        h_rat = next((str(h.get("rationale") or "").strip()
+                      for h in holds if h.get("rationale")), rationale)
+        if h_rat:
+            db.log_event(ACCOUNT, "yolo", "skip", f"hold: {h_rat[:180]}", dedup=True)
 
     print(f"[yolo] executed {executed}/{len(actions)} actions | {rationale or '—'}")
 
