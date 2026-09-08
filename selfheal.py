@@ -152,16 +152,28 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
                     "type": "stop", "stop_price": f"{stop_px:.2f}",
                     "time_in_force": tif,
                 })
-                if tgt_px and tgt_px > 0:
+            except AlpacaError as e:
+                _log(account, "error", f"{sym}: protection re-attach failed: {e}")
+                continue
+            _log(account, "fix", f"{sym}: re-attached protective stop {stop_px:.2f}", detail)
+            # The take-profit target is BEST-EFFORT: Alpaca lets only ONE
+            # independent closing order hold the full position qty, so once the
+            # protective stop above is accepted, a separate limit sell for the
+            # same qty is rejected (403 "insufficient qty available"). The stop
+            # is the safety-critical leg and is already live — log a warn, not
+            # an error, so a benign target gap never masks the stop fix or
+            # wakes the watchdog as a hard failure.
+            if tgt_px and tgt_px > 0:
+                try:
                     client.submit_order({
                         "symbol": sym, "qty": str(int(qty)), "side": opp,
                         "type": "limit", "limit_price": f"{tgt_px:.2f}",
                         "time_in_force": tif,
                     })
-            except AlpacaError as e:
-                _log(account, "error", f"{sym}: protection re-attach failed: {e}")
-                continue
-            _log(account, "fix", f"{sym}: re-attached protective stop {stop_px:.2f}", detail)
+                except AlpacaError as e:
+                    _log(account, "warn",
+                         f"{sym}: take-profit target not re-attached "
+                         f"(stop already protects {qty:g} shares): {e}")
 
     # ---- R3: cancel orphan protective orders on flat symbols ------------ #
     if config.SELFHEAL.get("cancel_debris", True):
