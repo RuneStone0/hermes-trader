@@ -45,6 +45,17 @@ def _to_price(v, ref: float):
 
 
 def _ref_price(client: AlpacaClient, sym: str) -> float | None:
+    """Live execution reference = the broker's LATEST TRADE price.
+
+    Alpaca validates bracket legs against the live price at submission (a
+    stop within $0.01 of it -> HTTP 422), so a stale daily close is NOT a valid
+    reference (MSFT 2026-09-08: close 510.12 vs live 490.56 -> stop rejected).
+    Falls back to the last daily close only if the live feed is unavailable;
+    the geometry guards below still protect against a stale level.
+    """
+    lt = client.latest_trade(sym)
+    if lt and lt.get("price", 0) > 0:
+        return lt["price"]
     try:
         bars = client.bars(sym, timeframe="1Day", limit=5, start=None).get("bars", [])
     except AlpacaError:
@@ -94,6 +105,13 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
     notional = equity * size_pct
     qty = max(1, int(notional / ref))
 
+    # Alpaca validates bracket legs against the LIVE price at submission and
+    # rejects any stop within $0.01 of it (HTTP 422, code 42210000 — seen on
+    # MSFT 2026-09-08). Enforce a small % buffer so a stale/gap/tight stop can
+    # never 422 again; violations are logged no_go (fail-closed, no retry).
+    min_stop = max(0.01, ref * config.YOLO["min_stop_dist_pct"])
+    min_tgt = max(0.01, ref * config.YOLO["min_target_dist_pct"])
+
     stop = _to_price(a.get("stop"), ref)
     if stop is None or stop <= 0:
         print(f"[yolo] reject {sym}: missing/invalid stop-loss")
@@ -103,6 +121,11 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
         print(f"[yolo] reject {sym}: stop {stop:.2f} on wrong side of {ref:.2f}")
         db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: stop on wrong side of entry")
         return False
+    if (long and stop > ref - min_stop) or ((not long) and stop < ref + min_stop):
+        print(f"[yolo] reject {sym}: stop {stop:.2f} within {min_stop:.2f} of live {ref:.2f}")
+        db.log_event(ACCOUNT, "yolo", "no_go",
+                     f"{sym}: stop {stop:.2f} too close to live price {ref:.2f}")
+        return False
 
     target = _to_price(a.get("target"), ref)
     risk_dist = abs(ref - stop)
@@ -111,6 +134,11 @@ def _open_action(client, a, equity, buying_power, positions, dry_run) -> bool:
     if (long and target <= ref) or ((not long) and target >= ref):
         print(f"[yolo] reject {sym}: target on wrong side")
         db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: target on wrong side")
+        return False
+    if (long and target < ref + min_tgt) or ((not long) and target > ref - min_tgt):
+        print(f"[yolo] reject {sym}: target {target:.2f} within {min_tgt:.2f} of live {ref:.2f}")
+        db.log_event(ACCOUNT, "yolo", "no_go",
+                     f"{sym}: target {target:.2f} too close to live price {ref:.2f}")
         return False
 
     max_risk = equity * config.YOLO["max_risk_pct"]
@@ -218,8 +246,13 @@ def main() -> None:
         if not bars:
             continue
         closes = [float(b["c"]) for b in bars]
+        # Show the LLM BOTH the live print and the last daily close so it can
+        # see overnight gaps itself (live 490.56 vs last_close 510.12) instead
+        # of sizing stops off a stale level.
+        lt = client.latest_trade(sym)
         watch[sym] = {
-            "last": round(closes[-1], 2),
+            "last": round(lt["price"], 2) if lt else round(closes[-1], 2),
+            "last_close": round(closes[-1], 2),
             "chg_5d_pct": round((closes[-1] / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else None,
             "chg_30d_pct": round((closes[-1] / closes[0] - 1) * 100, 2),
             "high_30d": round(max(float(b["h"]) for b in bars), 2),

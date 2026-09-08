@@ -30,9 +30,10 @@ import schedule
 ACCOUNTS = ("daily", "weekly", "yolo")
 _STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
 _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback",
-                   "yolo": "YOLO"}
+                   "yolo": "YOLO", "selfheal": "Self-heal"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
-                    "skip": "#8b949e", "error": "#f85149"}
+                    "skip": "#8b949e", "error": "#f85149",
+                    "fix": "#2ea043", "warn": "#d29922"}
 
 # Trading candlestick favicon (dark card + 3 candles, dashboard palette),
 # inlined as a data URI so the HTML stays fully self-contained.

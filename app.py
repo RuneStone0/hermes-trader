@@ -33,6 +33,8 @@ JOBS = [
      "cmd": [sys.executable, "weekly_run.py"], "timeout": 180},
     {"name": "reconcile", "type": "interval", "interval_s": 600,
      "cmd": [sys.executable, "reconcile.py"], "timeout": 180},
+    {"name": "selfheal", "type": "interval", "interval_s": 600,
+     "cmd": [sys.executable, "selfheal.py"], "timeout": 180},
     {"name": "yolo", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 1800,
      "market_gate": True, "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],

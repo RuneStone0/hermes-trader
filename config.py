@@ -155,6 +155,11 @@ YOLO = {
     "require_stop_loss": True,
     "allowed_assets": ["us_equity", "us_etf", "us_option"],  # retail-accessible only
     "crypto_allowlist": CRYPTO_ALLOWLIST,  # crypto: BTC only (no other crypto)
+    # Bracket-geometry buffers: all stops/targets are validated against the LIVE
+    # price (Alpaca 422s any stop within $0.01 of it). These are the minimum
+    # entry->stop / entry->target distances as a % of the live price.
+    "min_stop_dist_pct": 0.002,     # stop must clear entry by >= 0.2%
+    "min_target_dist_pct": 0.001,   # target must clear entry by >= 0.1%
     # v1 auto-trade universe (liquid, retail-accessible US equities/ETFs).
     # Options and BTC/USD are excluded from v1 auto-execution because they need
     # the options-chain / crypto market-data endpoints, which are follow-ups.
@@ -163,4 +168,23 @@ YOLO = {
         "XLF", "XLE", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "SMH",
         "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
     ],
+}
+
+# --------------------------------------------------------------------------- #
+# Self-healing (OPERATIONAL knobs — NOT strategy; safe for autonomous runs)
+# --------------------------------------------------------------------------- #
+# selfheal.py restores intended broker state when runtime anomalies break it
+# (day-TIF bracket legs cancelled at 20:00 ET leaving a naked position, orphaned
+# protective orders on flat symbols, DB drift vs broker). It never opens NEW
+# trades and never invents risk levels: protective prices are copied verbatim
+# from the trade's own stop_price/target_price. Reconcile (fills/P&L) is
+# separate; selfheal fixes STATE. Hermes monitors the outcome.
+SELFHEAL = {
+    "enabled": True,
+    "adopt_missing_rows": True,    # R1: create DB row for a broker position missing one
+    "reattach_protection": True,   # R2: re-place stop(+target) legs for naked positions
+    "cancel_debris": True,         # R3: cancel orphan protective orders on flat symbols
+    "void_unfilled": True,         # R4: void DB rows whose broker order cancelled unfilled
+    "open_tif": "day",             # TIF for re-attached protection during market hours
+    "after_hours_tif": "gtc",      # TIF after the close (protects the overnight hold)
 }
