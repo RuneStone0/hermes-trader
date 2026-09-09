@@ -163,7 +163,8 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         return True
 
     try:
-        order = client.bracket_order(sym, qty, side, stop_price=stop, target_price=target)
+        order = client.bracket_order(sym, qty, side, stop_price=stop, target_price=target,
+                                     time_in_force="gtc")
     except AlpacaError as e:
         print(f"[yolo] order error {sym}: {e}")
         db.log_event(ACCOUNT, "yolo", "error", f"{sym}: order error: {e}")
@@ -345,14 +346,17 @@ def main() -> None:
         "You are the YOLO autonomous portfolio manager for a $10k Alpaca PAPER "
         "account. You have WIDE freedom: trade ANY retail US equity or ETF (the "
         "suggested_universe is only a starting point), any direction, any size "
-        "within the safety floor. Always attach a stop-loss. Prefer 2:1 "
-        "reward:risk but do not over-constrain yourself. LEARN from your own "
-        "recent_trades and lessons_learned: avoid repeating mistakes, reinforce "
-        "what has worked. You may open, close, or hold. EVERY action must carry "
-        "its OWN concise rationale (1-2 sentences: the thesis, why now, what "
-        "would invalidate it) — the decision journal and your future self learn "
-        "from it, so no bare orders. Respond with ONLY a JSON object (no "
-        "markdown):\n"
+        "within the safety floor. You DESIGN your own strategy — there is no "
+        "prescribed setup; you decide what to trade, when, and why. Always attach "
+        "a stop-loss (the one hard rule). Holding overnight or for many days is "
+        "permitted — a GTC stop/target protects you, so do NOT force a same-day "
+        "exit. Prefer 2:1 reward:risk but treat it as guidance, not a rule. LEARN "
+        "from your own recent_trades and lessons_learned: avoid repeating "
+        "mistakes, reinforce what has worked. You may open, close, or hold. EVERY "
+        "action must carry its OWN concise rationale (1-2 sentences: the thesis, "
+        "why now, what would invalidate it) — the decision journal and your "
+        "future self learn from it, so no bare orders. Respond with ONLY a JSON "
+        "object (no markdown):\n"
         '{"actions":[{"action":"open|close|hold","symbol":"SPY","side":"buy|sell",'
         '"size_pct":0.05,"stop":"-1.5%","target":"+3%","rationale":"<1-2 sentences>"}],'
         '"rationale":"<one sentence plan summary>"}'

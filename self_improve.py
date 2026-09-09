@@ -2,12 +2,19 @@
 
 Reviews closed-trade performance plus the existing lessons/proposals notes, then
 asks the LLM for:
-  - operational lessons  -> appended to lessons_learned.md
-  - strategy proposals   -> appended to strategy_proposals.md (marked PENDING REVIEW)
+  - operational lessons      -> appended to lessons_learned.md
+  - strategy changes         -> TWO kinds:
+      (a) TUNE-ABLE params (map to the config auto-tune whitelist) are
+          VALIDATED against the safety floor and AUTO-APPLIED (written to
+          strategy_overrides.json, which every run script re-imports).
+      (b) STRUCTURAL proposals (new rules/filters) have no safe param mapping
+          -> appended to strategy_proposals.md as PENDING REVIEW.
 
-Safety: this routine NEVER mutates trading code or strategy params. Those are
-human-reviewed (or applied by the Hermes monitor). An unattended container must
-not self-modify its own trading logic.
+Safety: the routine can tune ONLY whitelisted knobs within their allowed bounds
+(config.propose_override clamps everything and drops the irreducible floor —
+stop-loss / retail-only / BTC-only can NEVER be disabled here). Every applied
+change is journaled so the system stays auditable. An unattended container CAN
+now evolve its own strategy parameters, but never its own safety floor.
 """
 from __future__ import annotations
 
@@ -47,19 +54,48 @@ def _tail(path, n: int = 2000) -> str:
     return path.read_text()[-n:]
 
 
+def _write_overrides(clean: dict) -> None:
+    """Atomic merge of `clean` into the override file (existing knobs kept)."""
+    existing: dict = {}
+    if config.OVERRIDES_PATH.exists():
+        try:
+            existing = json.loads(config.OVERRIDES_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    # Deep-merge per section (new value wins; untouched knobs preserved).
+    merged = dict(existing)
+    for sec, vals in clean.items():
+        if sec in ("DAILY", "WEEKLY", "YOLO"):
+            merged.setdefault(sec, {})
+            merged[sec].update(vals)
+        else:
+            merged[sec] = vals
+    config.OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config.OVERRIDES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    tmp.replace(config.OVERRIDES_PATH)
+
+
 def main() -> None:
     db.init_db()
     perf = _perf_summary()
+    knobs = config.tunable_knobs()
 
     system = (
         "You are a trading-system self-improvement analyst. Given performance "
         "stats and the current lessons/proposals notes, produce TWO lists:\n"
-        " 1. 'lessons': operational observations — what to keep doing, stop doing, "
-        "or watch for. Concrete and specific.\n"
-        " 2. 'proposals': strategy changes worth evaluating (entry rules, filters, "
-        "risk sizing, exit management). Do NOT propose anything that would violate "
-        "the hard rules (retail instruments only, no crypto except BTC, stop-loss "
-        "required, paper-only).\n"
+        " 1. 'lessons': operational observations — what to keep/stop/watch. "
+        "Concrete and specific.\n"
+        " 2. 'proposals': strategy changes worth evaluating. EACH carries a "
+        "'params' object. If the change is a PARAM shift, set params to the "
+        "NEW value for any of the tunable knobs below (this gets auto-applied). "
+        "If the change is STRUCTURAL (new rule/filter) with no tunable-param "
+        "mapping, set params to {} (it stays PENDING REVIEW).\n"
+        "You may move knobs within their allowed range. You can NEVER change a "
+        "knob outside 'tunable_knobs' — the stop-loss, retail-only and BTC-only "
+        "rules are off-limits. Do not propose anything that would violate them.\n"
         "Respond with ONLY a JSON object (no markdown):\n"
         '{"lessons":[{"topic":"...","detail":"..."}],'
         '"proposals":[{"title":"...","rationale":"...","params":{...}}]}'
@@ -68,23 +104,27 @@ def main() -> None:
         "performance": perf,
         "existing_lessons": _tail(config.LESSONS_PATH),
         "existing_proposals": _tail(config.PROPOSALS_PATH),
+        "tunable_knobs": knobs,
     }, indent=2)
 
     try:
         content = advisor.chat(system, user, temperature=0.3, max_tokens=4000)
     except Exception as e:
         print(f"[improve] LLM error: {e}")
+        db.log_event("improve", "self_improve", "error", f"LLM error: {e}")
         return
 
     out = advisor._extract_json(content)
     if not isinstance(out, dict):
         print("[improve] unparseable output (no-op)")
+        db.log_event("improve", "self_improve", "error", "unparseable LLM output")
         return
 
     lessons = out.get("lessons") or []
     proposals = out.get("proposals") or []
-
     stamp = _now()
+
+    # --- 1. lessons (always just appended) ---
     if lessons:
         config.LESSONS_PATH.parent.mkdir(parents=True, exist_ok=True)
         block = [f"\n## {stamp}\n"]
@@ -94,18 +134,72 @@ def main() -> None:
         with open(config.LESSONS_PATH, "a") as f:
             f.write("\n".join(block) + "\n")
 
-    if proposals:
-        config.PROPOSALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        block = [f"\n## {stamp} — PENDING REVIEW\n"]
+    # --- 2. proposals: split into auto-apply vs pending-review ---
+    candidate: dict = {}
+    pending: list[dict] = []
+    applied_details: list[str] = []
+    for p in proposals:
+        if not isinstance(p, dict):
+            continue
+        params = p.get("params") or {}
+        if isinstance(params, dict) and params:
+            candidate = _deep_merge(candidate, params)
+    clean, notes = config.propose_override(candidate)
+
+    for p in proposals:
+        if not isinstance(p, dict):
+            continue
+        params = p.get("params") or {}
+        if isinstance(params, dict) and not params:
+            pending.append(p)  # structural — no tunable param -> human review
+
+    # --- 3. auto-apply tuned knobs (within floor) ---
+    applied = bool(clean)
+    if applied:
+        _write_overrides(clean)
+        for sec, vals in clean.items():
+            for k, v in (vals.items() if isinstance(vals, dict) else [(sec, vals)]):
+                applied_details.append(f"{sec}.{k}={v}")
+        db.log_event("improve", "self_improve", "apply",
+                     f"auto-applied {len(applied_details)} tuned knob(s)",
+                     detail="; ".join(applied_details))
+    for n in notes:
+        db.log_event("improve", "self_improve", "warn",
+                     f"override note: {n}")
+
+    # --- 4. journal to strategy_proposals.md ---
+    config.PROPOSALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    block: list[str] = []
+    if applied:
+        block += [f"\n## {stamp} — AUTO-APPLIED (within safety floor)"]
         for p in proposals:
-            if isinstance(p, dict):
+            if isinstance(p, dict) and (p.get("params") or {}):
                 block.append(f"- **{p.get('title', 'proposal')}** — {p.get('rationale', '')}")
                 if p.get("params"):
                     block.append(f"  `{json.dumps(p['params'], sort_keys=True)}`")
+        if notes:
+            block.append(f"  *notes: {'; '.join(notes)}*")
+    if pending:
+        block += [f"\n## {stamp} — PENDING REVIEW (structural, no auto-apply)"]
+        for p in pending:
+            block.append(f"- **{p.get('title', 'proposal')}** — {p.get('rationale', '')}")
+    if block:
         with open(config.PROPOSALS_PATH, "a") as f:
             f.write("\n".join(block) + "\n")
 
-    print(f"[improve] appended {len(lessons)} lessons, {len(proposals)} proposals")
+    print(f"[improve] appended {len(lessons)} lessons; "
+          f"auto-applied {len(applied_details)} knob(s); "
+          f"{len(pending)} structural proposal(s) left for review")
+
+
+def _deep_merge(base: dict, new: dict) -> dict:
+    out = dict(base)
+    for k, v in new.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 
 if __name__ == "__main__":

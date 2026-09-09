@@ -2,7 +2,8 @@
 
 Logic: trend from price vs 20-week (≈100d) SMA. In an uptrend, buy a pullback to
 within 1x daily-ATR of the SMA; in a downtrend, short a rally to within 1x ATR.
-Stop = 1x ATR, target = 2x ATR (2:1), hold up to max_hold_days. One position.
+Stop = 1x ATR, target = 1.5x ATR, driven by the GTC stop/target bracket (no
+forced time-stop — a position may be held overnight). One position slot.
 
 Usage: python3 weekly_run.py [--dry-run]
 """
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -63,24 +64,11 @@ def main() -> None:
     positions = {p["symbol"]: p for p in client.positions()}
     open_trades = db.open_trades(ACCOUNT)
 
-    # 1. Time-stop: close positions held longer than max_hold_days.
+    # 1. Already positioned? The stop/target bracket decides the exit — NO
+    #    forced time-stop. A position may be held overnight (bracket is GTC).
     if SYMBOL in positions:
-        held = open_trades[0] if open_trades else None
-        if held and held["entry_time"]:
-            try:
-                et = datetime.fromisoformat(held["entry_time"].replace("Z", "+00:00"))
-                if datetime.now(et.tzinfo) - et > timedelta(days=config.WEEKLY["max_hold_days"]):
-                    print(f"[weekly] max hold exceeded, closing {SYMBOL}")
-                    db.log_event(ACCOUNT, "weekly_pullback", "exit",
-                                 f"closed {SYMBOL}: max hold ({config.WEEKLY['max_hold_days']}d) exceeded")
-                    if not args.dry_run:
-                        client.cancel_all()
-                        client.close_position(SYMBOL)
-                    return
-            except ValueError:
-                pass
         db.log_event(ACCOUNT, "weekly_pullback", "skip", "already positioned", dedup=True)
-        return  # already positioned
+        return
 
     # 2. Fetch daily bars for trend + ATR.
     bars = client.bars(SYMBOL, timeframe="1Day", limit=140, start=None).get("bars", [])

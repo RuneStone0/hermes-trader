@@ -3,7 +3,9 @@ minutes during market hours via cron.
 
 Flow per tick: compute the ORB (09:30-10:00), detect a breakout with close
 confirmation, size for 1% risk with a 2:1 target, gate through the LLM advisor,
-place a bracket order, and force flat by 15:50 ET. One trade per day.
+and place a GTC bracket order. NO forced flatten: a position may be held
+overnight — the stop/target legs (GTC) protect it, and the LLM decides when to
+exit. One decision per today (loose cap).
 
 Usage: python3 daily_run.py [--dry-run]
 """
@@ -126,22 +128,8 @@ def main() -> None:
     equity = float(client.account().get("equity", 10000.0))
 
     positions = client.positions()
-    pos = next((p for p in positions if p["symbol"] == SYMBOL), None)
 
-    # 1. Force flat by the configured cutoff.
-    if pos and hm >= config.DAILY["flat_by"]:
-        print(f"[daily] {hm} flattening {SYMBOL}")
-        db.log_event(ACCOUNT, "daily_orb", "exit", f"flattened {SYMBOL} at {hm} (time stop)")
-        if not args.dry_run:
-            try:
-                client.cancel_all()
-                client.close_position(SYMBOL)
-            except AlpacaError as e:
-                print(f"[daily] flatten error: {e}")
-                db.log_event(ACCOUNT, "daily_orb", "error", f"flatten error: {e}")
-        return
-
-    # 2. Already decided today.
+    # 2. Already decided today (loose cap, not a hard strategy rule).
     if st.get("decided"):
         db.log_event(ACCOUNT, "daily_orb", "skip", "already decided today", dedup=True)
         return
@@ -212,7 +200,8 @@ def main() -> None:
     try:
         order = client.bracket_order(
             SYMBOL, shares, "buy" if setup["side"] == "long" else "sell",
-            stop_price=setup["stop"], target_price=setup["target"])
+            stop_price=setup["stop"], target_price=setup["target"],
+            time_in_force=config.DAILY.get("time_in_force", "gtc"))
     except AlpacaError as e:
         st.update(decided=True, decision="error", note=f"order error: {e}")
         _save_state(d, st)
