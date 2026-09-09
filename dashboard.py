@@ -154,16 +154,32 @@ tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px s
 #tip{position:fixed;display:none;z-index:999;max-width:280px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.4;box-shadow:0 10px 28px rgba(0,0,0,.6);pointer-events:none}
 #tip b{display:block;font-size:12.5px;color:var(--text);margin-bottom:2px;white-space:normal}
 #tip span{color:var(--muted)}
-.dl{margin:4px 0}
-.lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
+/* --- decision-log detail (expanded "Why" row) --- */
+.dd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;font-size:14px}
+.dd-head .sym{font-weight:700;font-size:15px;letter-spacing:.01em}
+.dd-head .qty{font-size:12px}
+.dd-badge{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--border);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dd-badge.long{color:var(--pos);border-color:var(--pos)}
+.dd-badge.short{color:var(--neg);border-color:var(--neg)}
+.dd-size{font-size:12px}
+.dd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px 18px;padding:12px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:0 0 12px}
+.dd-k{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+.dd-v{font-size:13px;margin-top:2px}
+.dd-v small{font-size:11px;font-weight:400}
+.dd-narr{margin-top:4px}
+.dd-sec{margin:12px 0}
+.dd-sec.why{background:rgba(88,166,255,.07);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;padding:9px 12px}
+.dd-sec-label{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+.dd-sec.why .dd-sec-label{color:var(--accent)}
+.dd-text{font-size:13.5px;line-height:1.55}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .long{color:var(--pos)}.short{color:var(--neg)}
 /* --- per-position "why" button + expanding detail row --- */
 .dbtn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:5px 7px;line-height:1;display:inline-flex;align-items:center;gap:4px;vertical-align:middle;transition:all .12s;min-width:26px;justify-content:center}
 .dbtn:hover{color:var(--accent);border-color:var(--accent)}
 .dbtn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
-.drow td{padding:0;background:rgba(88,166,255,.03)}
-.ddetail{padding:12px 14px 14px;font-size:12.5px;border-top:1px dashed var(--border)}
+.drow td{padding:0;background:linear-gradient(180deg,rgba(88,166,255,.05),rgba(88,166,255,.02))}
+.ddetail{padding:16px 18px 18px;font-size:13px;border-top:1px solid var(--border);border-left:3px solid var(--accent)}
 .drow.hidden{display:none}
 /* --- decision journal --- */
 details.journal summary{cursor:pointer;user-select:none;display:inline-block;margin:26px 0 0;font-size:15px;font-weight:600}
@@ -178,6 +194,9 @@ details.journal .muted{font-weight:400;font-size:12px}
   .dbtn{padding:7px 9px;min-width:32px}
   th,td{padding:9px 8px;font-size:12.5px}
   #tip{max-width:78vw}
+  .ddetail{padding:14px 14px}
+  .dd-grid{grid-template-columns:1fr 1fr;gap:9px 14px}
+  .dd-head{gap:8px}
 }
 """
 
@@ -321,69 +340,90 @@ def _dbtn(on_row_id: int) -> str:
 
 
 def _detail_row_html(r, eq: float | None, colspan: int) -> str:
-    """Expanded decision-log content shown when a position's icon is clicked."""
+    """Expanded decision-log content shown when a position's 'Why' is clicked.
+
+    Structured for skimming: a head line (symbol + side + decision), a compact
+    stats grid (risk/size/R:R/stop→target/opened), then narrative sections with
+    the thesis highlighted. Quiet fallback when nothing is logged.
+    """
     dj = _parse_json(r["decision_json"])
     ctx = (dj or {}).get("context") or {}
-    rows: list[tuple[str, str]] = []
+    symbol = html.escape(r["symbol"])
+    side = r["side"]
 
-    # Position math first: risk $ and size $ (+ % of equity when known).
-    math_bits = []
+    # --- head: what happened, at a glance ---
+    head = (f"<span class='sym'>{symbol}</span>"
+            f"<span class='qty muted'>x{r['qty']:g}</span>"
+            f"<span class='dd-badge {side}'>{html.escape(side)}</span>")
+    if (dj or {}).get("decision"):
+        head += _event_badge((dj or {}).get("decision"))
+    size_mult = (dj or {}).get("size_multiplier")
+    if size_mult is not None and 0 < float(size_mult) < 1.0:
+        head += f"<span class='muted dd-size'>sized {size_mult:g}</span>"
+
+    # --- stats grid: the numbers ---
+    stats: list[tuple[str, str]] = []
     risk = _risk_usd(r)
     if risk is not None:
-        risk_txt = f"Risk {_money(risk)}"
+        txt = _money(risk)
         fr = _fraction(r, eq, risk)
         if fr is not None:
-            risk_txt += f" ({fr:.2%} of equity)"
-        math_bits.append(risk_txt)
+            txt += f" <small>({fr:.1%} eq)</small>"
+        stats.append(("Risk", txt))
     notional = _notional(r)
     if notional is not None:
-        size_txt = f"Size {_money(notional)}"
+        txt = _money(notional)
         fr = _fraction(r, eq, notional)
         if fr is not None:
-            size_txt += f" ({fr:.2%} of equity)"
-        math_bits.append(size_txt)
+            txt += f" <small>({fr:.1%} eq)</small>"
+        stats.append(("Size", txt))
     rr = _rr_planned(r)
     if rr is not None:
-        math_bits.append(f"Planned R:R {rr:g}")
-    if math_bits:
-        rows.append(("Position", " · ".join(math_bits)))
-
-    decision = (dj or {}).get("decision")
-    if decision:
-        badge = _event_badge(decision)
-        if (dj or {}).get("size_multiplier") is not None:
-            badge += f" <span class='muted'>· size {dj['size_multiplier']:g}</span>"
-        rows.append(("Decision", badge))
-
-    rationale = (dj or {}).get("rationale")
-    if rationale:
-        rows.append(("Rationale", html.escape(str(rationale))))
-    elif r["note"]:
-        rows.append(("Rationale", html.escape(str(r["note"]))))
-
-    close_rat = (dj or {}).get("close_rationale")
-    if close_rat:
-        rows.append(("Exit reason", html.escape(str(close_rat))))
-
-    if ctx.get("technical"):
-        rows.append(("Setup", html.escape(str(ctx["technical"]))))
-    if ctx.get("market_regime"):
-        rows.append(("Regime", html.escape(str(ctx["market_regime"]))))
-    if ctx.get("risk_reward") is not None:
-        rr_txt = str(ctx["risk_reward"])
+        stats.append(("Planned R:R", f"{rr:g}"))
+    crr = ctx.get("risk_reward")
+    if crr is not None:
+        txt = str(crr)
         if ctx.get("net_rr_after_fees") is not None:
-            rr_txt += f" <span class='muted'>(net {ctx['net_rr_after_fees']} after fees)</span>"
-        rows.append(("Risk:reward", rr_txt))
-    if ctx.get("recent_performance"):
-        rows.append(("Recent", html.escape(str(ctx["recent_performance"]))))
-
+            txt += f" <small>(net {ctx['net_rr_after_fees']})</small>"
+        stats.append(("R:R", txt))
+    stop, tgt = r["stop_price"], r["target_price"]
+    if stop and tgt:
+        stats.append(("Stop → Target", f"{_money(stop)} → {_money(tgt)}"))
     when = r["entry_time"] or r["created_at"]
     if when:
-        rows.append(("Opened", _fmt_ts(when)))
+        stats.append(("Opened", _fmt_ts(when)))
+    grid = "".join(
+        f"<div class='s'><div class='dd-k'>{k}</div><div class='dd-v'>{v}</div></div>"
+        for k, v in stats)
 
-    body = "".join(f"<div class='dl'><span class='lbl'>{k}</span> {v}</div>" for k, v in rows)
-    if not body:
-        body = "<div class='muted'>No decision summary recorded for this trade.</div>"
+    # --- narrative sections (thesis highlighted) ---
+    rationale = (dj or {}).get("rationale") or r["note"]
+    secs: list[tuple[str, str, bool]] = []
+    if rationale:
+        secs.append(("Why", html.escape(str(rationale)), True))
+    if ctx.get("technical"):
+        secs.append(("Setup", html.escape(str(ctx["technical"])), False))
+    if ctx.get("market_regime"):
+        secs.append(("Regime", html.escape(str(ctx["market_regime"])), False))
+    close_rat = (dj or {}).get("close_rationale")
+    if close_rat:
+        secs.append(("Exit reason", html.escape(str(close_rat)), False))
+    if ctx.get("recent_performance"):
+        secs.append(("Recent", html.escape(str(ctx["recent_performance"])), False))
+    secs_html = "".join(
+        f"<div class='dd-sec{' why' if why else ''}'>"
+        f"<div class='dd-sec-label'>{label}</div>"
+        f"<div class='dd-text'>{txt}</div></div>"
+        for label, txt, why in secs)
+
+    if not (stats or secs):
+        body = "<div class='muted' style='padding:10px 0'>No decision summary recorded for this trade.</div>"
+    else:
+        body = f"<div class='dd-head'>{head}</div>"
+        if stats:
+            body += f"<div class='dd-grid'>{grid}</div>"
+        if secs:
+            body += f"<div class='dd-narr'>{secs_html}</div>"
     return f"<tr class='drow hidden'><td colspan='{colspan}'><div class='ddetail'>{body}</div></td></tr>"
 
 
