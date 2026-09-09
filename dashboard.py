@@ -110,6 +110,9 @@ _CSS = """
 html{-webkit-text-size-adjust:100%}
 body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:0;min-height:100vh}
 main{padding:18px 20px 40px;max-width:1100px;margin:0 auto}
+.page-meta{color:var(--muted);font-size:12px;margin:2px 0 14px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;line-height:1.4}
+.page-meta strong{color:var(--text);font-weight:600}
+.page-meta .strategy{font-weight:600;color:var(--text)}
 h1{font-size:20px;font-weight:600}
 h2{font-size:15px;margin:26px 0 12px;font-weight:600}
 h3{font-size:13px;color:var(--accent);margin-bottom:6px}
@@ -706,8 +709,7 @@ def _account_body(account: str) -> str:
     eq_txt = _money(eq_a) if eq_a is not None else "—"
 
     return f"""
-<h2>{account.upper()} <span class='muted' style='font-size:13px'>— {label}</span></h2>
-<div class='muted' style='margin:4px 0 0'>Next evaluation: {schedule.next_label(account)}</div>
+<div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong></div>
 <div class='grid'>
 {_card("Portfolio value", eq_txt, "account equity")}
 {_card("Net P/L", _money(s["net"]), f"gross {_money(s['gross'])} · fees {_money(s['fees'])}", sign=s["net"])}
