@@ -35,6 +35,50 @@ _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
                     "fix": "#2ea043", "warn": "#d29922"}
 
+# Symbol -> (full name, one-line description) for the hover / tap tooltip.
+# Covers the watchlist + common traded instruments; anything else falls back to
+# "Traded instrument". Kept server-side so the HTML stays self-contained (no CDN,
+# no per-request API calls).
+SYMBOL_INFO = {
+    "SPY": ("SPDR S&P 500 ETF Trust", "Tracks the S&P 500 index — the broad US large-cap market."),
+    "QQQ": ("Invesco QQQ Trust", "Tracks the Nasdaq-100 — the 100 largest non-financial Nasdaq stocks."),
+    "IWM": ("iShares Russell 2000 ETF", "Tracks the Russell 2000 — US small-cap stocks."),
+    "DIA": ("SPDR Dow Jones Industrial ETF", "Tracks the 30-stock Dow Jones Industrial Average."),
+    "GLD": ("SPDR Gold Shares", "Tracks the spot price of gold bullion."),
+    "SLV": ("iShares Silver Trust", "Tracks the spot price of silver bullion."),
+    "TLT": ("iShares 20+ Year Treasury ETF", "Long-dated US Treasury bonds (20+ yr exposure)."),
+    "IEF": ("iShares 7-10 Year Treasury ETF", "Intermediate US Treasury bonds (7-10 yr)."),
+    "HYG": ("iShares iBoxx High Yield Corp ETF", "High-yield (junk) corporate bonds."),
+    "XLF": ("Financial Select Sector SPDR", "S&P 500 financial sector (banks, insurance)."),
+    "XLE": ("Energy Select Sector SPDR", "S&P 500 energy sector (oil & gas)."),
+    "XLK": ("Technology Select Sector SPDR", "S&P 500 technology sector."),
+    "XLV": ("Health Care Select Sector SPDR", "S&P 500 health care sector."),
+    "XLI": ("Industrial Select Sector SPDR", "S&P 500 industrial sector."),
+    "XLY": ("Consumer Discretionary SPDR", "S&P 500 consumer discretionary sector."),
+    "XLP": ("Consumer Staples Select SPDR", "S&P 500 consumer staples sector."),
+    "XLU": ("Utilities Select Sector SPDR", "S&P 500 utilities sector."),
+    "XLB": ("Materials Select Sector SPDR", "S&P 500 materials sector."),
+    "SMH": ("VanEck Semiconductor ETF", "Semiconductor industry exposure."),
+    "AAPL": ("Apple Inc.", "Consumer electronics and services company."),
+    "MSFT": ("Microsoft Corporation", "Software and cloud computing company."),
+    "NVDA": ("NVIDIA Corporation", "Graphics processors and AI compute."),
+    "AMZN": ("Amazon.com, Inc.", "E-commerce, cloud (AWS), and digital media."),
+    "GOOGL": ("Alphabet Inc.", "Google search, ads, and cloud (Class A)."),
+    "META": ("Meta Platforms, Inc.", "Facebook, Instagram, and WhatsApp."),
+    "TSLA": ("Tesla, Inc.", "Electric vehicles and energy storage."),
+}
+
+
+def _sym_tag(symbol: str) -> str:
+    """A symbol cell that reveals the instrument's full name + description on
+    hover (desktop) or tap (mobile). Data attributes drive a single JS tooltip."""
+    name, desc = SYMBOL_INFO.get(symbol, (f"{symbol}", "Traded instrument."))
+    s = html.escape(symbol)
+    n = html.escape(name)
+    d = html.escape(desc)
+    return (f"<span class='sx' tabindex='0' role='button' "
+            f"data-name='{n}' data-desc='{d}'>{s}</span>")
+
 # Trading candlestick favicon (dark card + 3 candles, dashboard palette),
 # inlined as a data URI so the HTML stays fully self-contained.
 _FAVICON_SVG = (
@@ -60,13 +104,16 @@ _INFO_ICON = (
 )
 
 _CSS = """
-:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
---pos:#3fb950;--neg:#f85149;--accent:#58a6ff;}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:24px;max-width:1100px;margin:0 auto}
+:root{--bg:#0d1117;--card:#161b22;--card2:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+--pos:#3fb950;--neg:#f85149;--accent:#58a6ff;--accent-dim:rgba(88,166,255,.14);--topbar-h:52px}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;padding:0;min-height:100vh}
+main{padding:18px 20px 40px;max-width:1100px;margin:0 auto}
 h1{font-size:20px;font-weight:600}
-h2{font-size:15px;margin:28px 0 12px;font-weight:600}
+h2{font-size:15px;margin:26px 0 12px;font-weight:600}
 h3{font-size:13px;color:var(--accent);margin-bottom:6px}
+a{color:inherit}
 .muted{color:var(--muted)}
 .big{font-size:22px;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:16px 0}
@@ -76,37 +123,62 @@ h3{font-size:13px;color:var(--accent);margin-bottom:6px}
 .card-sub{color:var(--muted);font-size:12px;margin-top:2px}
 .pos{color:var(--pos)}.neg{color:var(--neg)}
 .accts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-.acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:var(--text);display:block;transition:border-color .15s}
+.acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:var(--text);display:block;transition:border-color .15s,transform .15s}
 .acct:hover{border-color:var(--accent)}
-.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:6px 6px;margin-top:16px;overflow-x:auto}
+.acct:active{transform:scale(.995)}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 0;margin-top:14px;overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
-th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
-tr:last-child td{border-bottom:none}
-.curve{width:100%;height:auto;background:var(--card);border:1px solid var(--border);border-radius:10px}
+th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.04em;padding-top:11px;padding-bottom:11px}
+td:first-child,th:first-child{padding-left:12px}
+td:last-child,th:last-child{padding-right:12px}
+tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px solid var(--border)}
+.curve{width:100%;height:auto;background:var(--card);border:1px solid var(--border);border-radius:10px;display:block}
 .curve path{fill:none;stroke:var(--accent);stroke-width:2}
 .curve .zero{stroke:var(--border);stroke-dasharray:4 4}
-.footer{color:var(--muted);font-size:12px;margin-top:24px}
+.footer{color:var(--muted);font-size:12px;margin-top:28px;padding-top:16px;border-top:1px solid var(--border);line-height:1.6}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
+/* --- sticky top menu bar (title + nav, saves page space) --- */
+.topbar{position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:14px;height:var(--topbar-h);padding:0 20px;background:rgba(13,17,23,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--border);max-width:1100px;margin:0 auto}
+.brand{font-size:16px;font-weight:700;letter-spacing:-.01em;text-decoration:none;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.brand .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--accent),#1f6feb);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#04141f}
+.brand .paper{font-size:10px;font-weight:700;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 7px;letter-spacing:.06em}
+.menu{display:flex;gap:4px;margin-left:auto;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tab{padding:7px 14px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;white-space:nowrap;flex-shrink:0;transition:color .12s,background .12s}
+.tab:hover{color:var(--text);background:var(--card2)}
+.tab.active{background:var(--accent);color:#0d1117}
 .tabs{display:flex;gap:6px;margin:18px 0 4px;flex-wrap:wrap}
-.tab{padding:6px 14px;border-radius:8px;border:1px solid var(--border);color:var(--muted);text-decoration:none;font-size:13px;font-weight:500}
-.tab:hover{color:var(--text);border-color:var(--accent)}
-.tab.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+/* --- symbol tooltip --- */
+.sx{position:relative;border-bottom:1px dotted var(--muted);cursor:help;font-weight:600;padding:0 1px}
+.sx:focus-visible{outline:2px solid var(--accent);border-radius:4px}
+#tip{position:fixed;display:none;z-index:999;max-width:280px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.4;box-shadow:0 10px 28px rgba(0,0,0,.6);pointer-events:none}
+#tip b{display:block;font-size:12.5px;color:var(--text);margin-bottom:2px;white-space:normal}
+#tip span{color:var(--muted)}
 .dl{margin:4px 0}
 .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .long{color:var(--pos)}.short{color:var(--neg)}
 /* --- per-position "why" button + expanding detail row --- */
-.dbtn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:3px 5px;line-height:1;display:inline-flex;vertical-align:middle;transition:all .12s}
+.dbtn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:5px 7px;line-height:1;display:inline-flex;align-items:center;gap:4px;vertical-align:middle;transition:all .12s;min-width:26px;justify-content:center}
 .dbtn:hover{color:var(--accent);border-color:var(--accent)}
-.dbtn.on{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.12)}
+.dbtn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
 .drow td{padding:0;background:rgba(88,166,255,.03)}
-.ddetail{padding:12px 14px 14px 46px;font-size:12.5px;border-top:1px dashed var(--border)}
+.ddetail{padding:12px 14px 14px;font-size:12.5px;border-top:1px dashed var(--border)}
 .drow.hidden{display:none}
-/* --- decision journal (collapsed by default) --- */
-details.journal summary{cursor:pointer;user-select:none;display:inline-block;margin:28px 0 0;font-size:15px;font-weight:600}
+/* --- decision journal --- */
+details.journal summary{cursor:pointer;user-select:none;display:inline-block;margin:26px 0 0;font-size:15px;font-weight:600}
 details.journal summary:hover{color:var(--accent)}
 details.journal .muted{font-weight:400;font-size:12px}
+/* --- mobile --- */
+@media (max-width:720px){
+  main{padding:14px 12px 32px}
+  .topbar{padding:0 12px;gap:10px}
+  .brand .paper{display:none}
+  .card-value{font-size:19px}
+  .dbtn{padding:7px 9px;min-width:32px}
+  th,td{padding:9px 8px;font-size:12.5px}
+  #tip{max-width:78vw}
+}
 """
 
 
@@ -317,7 +389,7 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
 
 # --- open positions table --------------------------------------------------- #
 
-_OPEN_TH = ("<tr><th></th><th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
+_OPEN_TH = ("<tr><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
             "<th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
 
 
@@ -341,7 +413,7 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
         rr = _rr_planned(r)
         out.append(
             f"<tr><td>{_dbtn(r['id'])}</td>{acct}"
-            f"<td><strong>{html.escape(r['symbol'])}</strong></td>"
+            f"<td>{_sym_tag(r['symbol'])}</td>"
             f"<td class='{side_cls}'>{html.escape(r['side'])}</td>"
             f"<td class='mono'>{r['qty']:g}</td>"
             f"<td>{size_txt}</td>"
@@ -373,7 +445,7 @@ def _closed_rows(rows, with_account: bool = True) -> str:
         out.append(
             f"<tr><td class='muted'>{_fmt_ts(r['exit_time'] or r['created_at'])}</td>"
             f"<td>{_dbtn(r['id'])}</td>{acct}"
-            f"<td><strong>{html.escape(r['symbol'])}</strong></td>"
+            f"<td>{_sym_tag(r['symbol'])}</td>"
             f"<td class='{side_cls}'>{html.escape(r['side'])}</td>"
             f"<td class='mono'>{r['qty']:g}</td>"
             f"<td>{_money(r['entry_price'])}</td>"
@@ -382,18 +454,6 @@ def _closed_rows(rows, with_account: bool = True) -> str:
         )
         out.append(_detail_row_html(r, None, ncol))
     return "".join(out)
-
-
-def _nav(active: str) -> str:
-    items = [("overview", "Overview", "/"),
-             ("daily", "Daily", "/daily"),
-             ("weekly", "Weekly", "/weekly"),
-             ("yolo", "YOLO", "/yolo")]
-    links = []
-    for key, label, href in items:
-        cls = "active" if key == active else ""
-        links.append(f"<a class='tab {cls}' href='{href}'>{label}</a>")
-    return f"<nav class='tabs'>{''.join(links)}</nav>"
 
 
 def _read_build_file(name: str) -> str | None:
@@ -429,29 +489,82 @@ def _build_info() -> str:
 
 def _page(title: str, active: str, body: str) -> str:
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # Top menu bar: title/brand + nav, saves vertical space vs a standalone h1.
+    items = [("overview", "Overview", "/"), ("daily", "Daily", "/daily"),
+             ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo")]
+    links = []
+    for key, label, href in items:
+        cls = " active" if key == active else ""
+        links.append(f"<a class='tab{cls}' href='{href}'>{label}</a>")
+    menu = "".join(links)
     return f"""<!doctype html>
-<html lang='en'><head><meta charset='utf-8'>
-<meta name='viewport' content='width=device-width, initial-scale=1'>
+<html lang='en'><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover'>
+<meta name='theme-color' content='#0d1117'>
+<meta name='apple-mobile-web-app-capable' content='yes'>
+<meta name='apple-mobile-web-app-status-bar-style' content='black-translucent'>
+<meta name='apple-mobile-web-app-title' content='Alpaca'>
 <title>{title} — Alpaca Trading</title>
 <link rel='icon' type='image/svg+xml' href='{_FAVICON}'>
-<style>{_CSS}</style></head><body>
-<h1>Alpaca Trading Dashboard <span class='badge'>PAPER</span></h1>
-<div class='muted' style='margin-top:4px'>Net P/L includes modelled regulatory fees (SEC / TAF / CAT) · generated {gen}</div>
-{_nav(active)}
+<style>{_CSS}</style></head>
+<body>
+<header class='topbar'>
+  <a class='brand' href='/'><span class='logo'>A</span>Alpaca<span class='paper'>PAPER</span></a>
+  <nav class='menu' aria-label='Navigation'>{menu}</nav>
+</header>
+<main>
 {body}
-<div class='footer'>Paper trading only. Not investment advice. Regulatory fees modelled per Alpaca's brokerage fee schedule.<br><span style='opacity:.65'>{_build_info()}</span></div>
+</main>
+<div id='tip' role='tooltip'></div>
+<footer class='footer'>Paper trading only. Not investment advice. Regulatory fees (SEC / TAF / CAT) are modelled per Alpaca's brokerage fee schedule; net P/L is gross minus those modelled fees.<br><span style='opacity:.65'>Generated {gen} · {_build_info()}</span></footer>
 <script>
-document.querySelectorAll('button.dbtn').forEach(function(b){{
-  b.addEventListener('click', function(){{
-    var tr = b.closest('tr');
-    var dr = tr ? tr.nextElementSibling : null;
-    if (dr && dr.classList.contains('drow')) {{
-      var open = dr.classList.toggle('hidden') === false;
-      b.classList.toggle('on', open);
-      b.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }}
+(function(){{
+  var tip = document.getElementById('tip');
+  function show(el){{
+    var name = el.getAttribute('data-name') || el.textContent;
+    var desc = el.getAttribute('data-desc') || '';
+    tip.innerHTML = '<b>'+name+'</b><span>'+desc+'</span>';
+    tip.style.display = 'block';
+    var r = el.getBoundingClientRect();
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = Math.min(Math.max(r.left + r.width/2 - w/2, 8), window.innerWidth - w - 8);
+    var y = r.top - h - 8;
+    if (y < 8) y = r.bottom + 10;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  }}
+  function hide(){{ tip.style.display = 'none'; }}
+  function attach(el){{
+    el.addEventListener('mouseenter', function(){{ show(el); }});
+    el.addEventListener('mouseleave', hide);
+    el.addEventListener('focus', function(){{ show(el); }});
+    el.addEventListener('blur', hide);
+    el.addEventListener('click', function(evt){{
+      evt.stopPropagation();
+      if (tip.style.display === 'block' && tip.__el === el) {{ hide(); tip.__el = null; }}
+      else {{ show(el); tip.__el = el; }}
+    }});
+  }}
+  Array.prototype.forEach.call(document.querySelectorAll('.sx'), attach);
+  document.addEventListener('click', function(evt){{
+    if (!evt.target.closest('.sx')) {{ hide(); tip.__el = null; }}
   }});
-}});
+  document.addEventListener('scroll', hide, {{passive:true}});
+  document.addEventListener('keydown', function(e){{ if(e.key==='Escape') hide(); }});
+  /* Per-position decision-log expander. */
+  Array.prototype.forEach.call(document.querySelectorAll('button.dbtn'), function(b){{
+    b.addEventListener('click', function(){{
+      var tr = b.closest('tr');
+      var dr = tr ? tr.nextElementSibling : null;
+      if (dr && dr.classList.contains('drow')) {{
+        var open = dr.classList.toggle('hidden') === false;
+        b.classList.toggle('on', open);
+        b.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }}
+    }});
+  }});
+}})();
 </script>
 </body></html>"""
 
@@ -459,7 +572,7 @@ document.querySelectorAll('button.dbtn').forEach(function(b){{
 def _open_positions_block(rows, eq: dict, with_account: bool = False) -> str:
     th = _OPEN_TH
     if with_account:
-        th = ("<tr><th></th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
+        th = ("<tr><th>Why</th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
               "<th>Size</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
     return f"<div class='panel'><table>{th}{_open_rows(rows, eq, with_account)}</table></div>"
 
@@ -510,7 +623,7 @@ def _overview_body() -> str:
 {_card("Open positions", str(len(open_t)))}
 </div>
 
-<h2>Open positions <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+<h2>Open positions</h2>
 {_open_positions_block(open_t, eq, with_account=True)}
 
 <h2>Accounts</h2>
@@ -519,8 +632,8 @@ def _overview_body() -> str:
 <h2>Equity curve (cumulative net P/L)</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
 
-<h2>Recent closed trades <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
-<div class='panel'><table><tr><th>Closed</th><th></th><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
+<h2>Recent closed trades</h2>
+<div class='panel'><table><tr><th>Closed</th><th>Why</th><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
 {_closed_rows(recent)}</table></div>
 """
 
@@ -553,14 +666,14 @@ def _account_body(account: str) -> str:
 {_card("Open positions", str(len(open_t)))}
 </div>
 
-<h2>Open positions <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
+<h2>Open positions</h2>
 {_open_positions_block(open_t, eq)}
 
 <h2>Equity curve</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
 
-<h2>Recent closed trades <span class='muted' style='font-weight:400;font-size:12px'>— click the ⓘ for each trade's decision log</span></h2>
-<div class='panel'><table><tr><th>Closed</th><th></th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
+<h2>Recent closed trades</h2>
+<div class='panel'><table><tr><th>Closed</th><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
 {_closed_rows(recent, with_account=False)}</table></div>
 
 <details class='journal'><summary>Decision journal <span class='muted'>— every go / no-go / skip / error this bot logged (latest {len(events)})</span></summary>
