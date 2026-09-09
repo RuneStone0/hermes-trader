@@ -58,13 +58,22 @@ def _orb_setup(bars: list, equity: float) -> dict | None:
     if rng <= 0:
         return None
     entry = side = None
+    confirm = config.DAILY.get("close_confirmation", True)
     for b in post:
-        if b["c"] > hi:
-            entry, side = hi, "long"
-            break
-        if b["c"] < lo:
-            entry, side = lo, "short"
-            break
+        if confirm:  # require a bar CLOSE beyond the range (classic ORB)
+            if b["c"] > hi:
+                entry, side = hi, "long"
+                break
+            if b["c"] < lo:
+                entry, side = lo, "short"
+                break
+        else:  # any wick beyond the range counts as a breakout
+            if b["h"] > hi:
+                entry, side = hi, "long"
+                break
+            if b["l"] < lo:
+                entry, side = lo, "short"
+                break
     if entry is None:
         return None
     stop = lo if side == "long" else hi
