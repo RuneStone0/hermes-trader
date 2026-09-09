@@ -36,10 +36,16 @@ def _ts(s: str) -> datetime | None:
 
 def reconcile_account(account: str) -> None:
     client = AlpacaClient(account)
-    # Snapshot equity for the dashboard's position-size % column (cheap, 10-min cadence).
+    # Snapshot equity/cash/last_equity for the dashboard's size-% column and
+    # Portfolio value card (cheap, 10-min cadence, no broker call per page view).
     try:
         acct = client.account()
-        db.save_account_state(account, equity=float(acct.get("equity") or 0.0))
+        db.save_account_state(
+            account,
+            equity=float(acct.get("equity") or 0.0),
+            cash=float(acct.get("cash") or 0.0),
+            last_equity=float(acct.get("last_equity") or 0.0) or None,
+        )
     except (AlpacaError, TypeError, ValueError):
         pass
 

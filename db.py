@@ -56,6 +56,8 @@ CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE TABLE IF NOT EXISTS account_state (
     account TEXT PRIMARY KEY,
     equity REAL,
+    cash REAL,
+    last_equity REAL,
     updated_at TEXT NOT NULL
 );
 """
@@ -88,6 +90,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
     if "decision_json" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN decision_json TEXT")
+    st_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account_state)").fetchall()}
+    if "cash" not in st_cols:
+        conn.execute("ALTER TABLE account_state ADD COLUMN cash REAL")
+    if "last_equity" not in st_cols:
+        conn.execute("ALTER TABLE account_state ADD COLUMN last_equity REAL")
 
 
 def insert_trade(**fields) -> int:
@@ -196,20 +203,40 @@ def last_event(account: str, strategy: str) -> sqlite3.Row | None:
         conn.close()
 
 
-def save_account_state(account: str, equity: float | None = None) -> None:
-    """Upsert a broker snapshot (equity) for an account.
+def save_account_state(account: str, equity: float | None = None,
+                       cash: float | None = None, last_equity: float | None = None) -> None:
+    """Upsert a broker snapshot (equity / cash / last_equity) for an account.
 
     Written by reconcile (every 10 min) so the dashboard can express position
-    size as a % of portfolio equity without hitting the broker per page view.
+    size / cash / % change without hitting the broker per page view. Uses an
+    upsert so callers may snapshot a subset of fields without nulling others.
     """
     conn = connect()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO account_state (account, equity, updated_at) "
-            "VALUES (?,?,?)",
-            (account, equity, _now()),
+            "INSERT INTO account_state (account, equity, cash, last_equity, updated_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(account) DO UPDATE SET "
+            "equity=COALESCE(excluded.equity, account_state.equity), "
+            "cash=COALESCE(excluded.cash, account_state.cash), "
+            "last_equity=COALESCE(excluded.last_equity, account_state.last_equity), "
+            "updated_at=excluded.updated_at",
+            (account, equity, cash, last_equity, _now()),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def account_state() -> dict[str, dict]:
+    """Latest known broker snapshot per account:
+    {'daily': {'equity':..,'cash':..,'last_equity':..}, ...}."""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT account, equity, cash, last_equity FROM account_state").fetchall()
+        return {r["account"]: {"equity": r["equity"], "cash": r["cash"],
+                               "last_equity": r["last_equity"]} for r in rows}
     finally:
         conn.close()
 

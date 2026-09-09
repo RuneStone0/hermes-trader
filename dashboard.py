@@ -125,6 +125,10 @@ a{color:inherit}
 .card-value{font-size:22px;font-weight:600;margin-top:4px}
 .card-sub{color:var(--muted);font-size:12px;margin-top:2px}
 .pos{color:var(--pos)}.neg{color:var(--neg)}
+.chip{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600;vertical-align:middle;margin-left:7px}
+.chip.pos{color:var(--pos);background:rgba(63,185,80,.13)}
+.chip.neg{color:var(--neg);background:rgba(248,81,73,.13)}
+.chip.flat{color:var(--muted);background:rgba(139,148,158,.14)}
 .accts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:var(--text);display:block;transition:border-color .15s,transform .15s}
 .acct:hover{border-color:var(--accent)}
@@ -232,6 +236,39 @@ def _card(title: str, value: str, sub: str = "", sign=None) -> str:
     return (f"<div class='card'><div class='card-title'>{title}</div>"
             f"<div class='card-value {color}'>{value}</div>"
             f"<div class='card-sub'>{sub}</div></div>")
+
+
+def _pct_chip(pct: float | None) -> str:
+    """A small colored pill for a signed percentage, e.g. '+0.09%' / '-0.11%'."""
+    if pct is None:
+        return ""
+    cls = "pos" if pct > 0 else ("neg" if pct < 0 else "flat")
+    sign = "+" if pct > 0 else ""
+    return f"<span class='chip {cls}'>{sign}{pct:.2f}%</span>"
+
+
+def _change_pct(equity, last_equity) -> float | None:
+    """% change of equity vs the account's last-close equity (None if unknown)."""
+    if equity is None or not last_equity:
+        return None
+    eq, le = float(equity), float(last_equity)
+    return (eq - le) / le * 100.0 if le > 0 else None
+
+
+def _portfolio_card(equity, cash, last_equity, sub: str = "", show_pct: bool = True) -> str:
+    """Portfolio value card: equity, % change vs last close, and a Cash line.
+
+    show_pct=False for cross-account aggregates (the combined % is meaningless
+    when accounts started independently) — per-account cards still carry one.
+    """
+    eq = float(equity) if equity is not None else None
+    val = _money(eq) if eq is not None else "—"
+    chip = _pct_chip(_change_pct(equity, last_equity)) if show_pct else ""
+    cash_txt = _money(cash) if cash is not None else "—"
+    sub_txt = f"Cash: {cash_txt}" + (f" · {sub}" if sub else "")
+    return (f"<div class='card'><div class='card-title'>Portfolio value</div>"
+            f"<div class='card-value'>{val}{chip}</div>"
+            f"<div class='card-sub'>{sub_txt}</div></div>")
 
 
 def _curve(points, w: int = 920, h: int = 240) -> str:
@@ -627,6 +664,7 @@ def _overview_body() -> str:
     open_t = db.open_trades()
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
     eq = db.account_equity()
+    st = db.account_state()
 
     acct_cards = []
     now = datetime.now(timezone.utc)
@@ -642,12 +680,14 @@ def _overview_body() -> str:
                      f"next: {schedule.next_label(a, now)}</div>")
         eq_a = eq.get(a)
         eq_txt = _money(eq_a) if eq_a is not None else "—"
+        sa = st.get(a, {})
+        chip = _pct_chip(_change_pct(sa.get("equity"), sa.get("last_equity")))
         net_cls = "pos" if s["net"] > 0 else ("neg" if s["net"] < 0 else "")
         acct_cards.append(
             f"<a class='acct' href='/{a}'>"
             f"<h3>{a.upper()}</h3>"
             f"<div class='card-title' style='margin-top:2px'>Portfolio value</div>"
-            f"<div class='big'>{eq_txt}</div>"
+            f"<div class='big'>{eq_txt}{chip}</div>"
             f"<div class='{net_cls}' style='margin-top:6px'>{_money(s['net'])} <span class='muted'>net</span></div>"
             f"<div class='muted' style='margin-top:2px'>{s['n']} trades · {s['win_rate']:.0%} win · fees {_money(s['fees'])}</div>"
             f"{next_line}{last_line}</a>"
@@ -656,6 +696,10 @@ def _overview_body() -> str:
     s_all = _stats(closed)
     eq_vals = [e for e in eq.values() if e is not None]
     total_eq = sum(eq_vals) if eq_vals else None
+    cash_vals = [s["cash"] for s in st.values() if s.get("cash") is not None]
+    total_cash = sum(cash_vals) if cash_vals else None
+    le_vals = [s["last_equity"] for s in st.values() if s.get("last_equity") is not None]
+    total_le = sum(le_vals) if le_vals else None
     curve_pts, cum = [], 0.0
     for t in closed_sorted:
         cum += (t["net_pnl"] or 0)
@@ -666,7 +710,7 @@ def _overview_body() -> str:
     return f"""
 <h2>All accounts</h2>
 <div class='grid'>
-{_card("Portfolio value", _money(total_eq), f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}")}
+{_portfolio_card(total_eq, total_cash, total_le, sub=f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}", show_pct=False)}
 {_card("Net P/L", _money(s_all["net"]), f"gross {_money(s_all['gross'])} · fees {_money(s_all['fees'])}", sign=s_all["net"])}
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
@@ -696,6 +740,7 @@ def _account_body(account: str) -> str:
     closed_sorted = sorted(closed, key=lambda t: t["exit_time"] or "")
     events = db.recent_events(100, account=account)
     eq = db.account_equity()
+    st = db.account_state()
 
     s = _stats(closed)
     curve_pts, cum = [], 0.0
@@ -705,13 +750,12 @@ def _account_body(account: str) -> str:
 
     recent = list(reversed(closed_sorted))[:20]
     label = _STRATEGY_LABEL.get(_STRATEGY[account], account)
-    eq_a = eq.get(account)
-    eq_txt = _money(eq_a) if eq_a is not None else "—"
+    sa = st.get(account, {})
 
     return f"""
 <div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong></div>
 <div class='grid'>
-{_card("Portfolio value", eq_txt, "account equity")}
+{_portfolio_card(sa.get("equity"), sa.get("cash"), sa.get("last_equity"))}
 {_card("Net P/L", _money(s["net"]), f"gross {_money(s['gross'])} · fees {_money(s['fees'])}", sign=s["net"])}
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
