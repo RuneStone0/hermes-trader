@@ -597,16 +597,22 @@ def _overview_body() -> str:
                          f"{html.escape((le['reason'] or '')[:90])}</div>")
         next_line = (f"<div class='muted' style='font-size:11px;margin-top:4px'>"
                      f"next: {schedule.next_label(a, now)}</div>")
+        eq_a = eq.get(a)
+        eq_txt = _money(eq_a) if eq_a is not None else "—"
+        net_cls = "pos" if s["net"] > 0 else ("neg" if s["net"] < 0 else "")
         acct_cards.append(
             f"<a class='acct' href='/{a}'>"
             f"<h3>{a.upper()}</h3>"
-            f"<div class='big {('pos' if s['net'] > 0 else ('neg' if s['net'] < 0 else ''))}'>{_money(s['net'])}</div>"
-            f"<div class='muted'>gross {_money(s['gross'])} · fees {_money(s['fees'])}</div>"
-            f"<div class='muted'>{s['n']} trades · {s['win_rate']:.0%} win</div>"
+            f"<div class='card-title' style='margin-top:2px'>Portfolio value</div>"
+            f"<div class='big'>{eq_txt}</div>"
+            f"<div class='{net_cls}' style='margin-top:6px'>{_money(s['net'])} <span class='muted'>net</span></div>"
+            f"<div class='muted' style='margin-top:2px'>{s['n']} trades · {s['win_rate']:.0%} win · fees {_money(s['fees'])}</div>"
             f"{next_line}{last_line}</a>"
         )
 
     s_all = _stats(closed)
+    eq_vals = [e for e in eq.values() if e is not None]
+    total_eq = sum(eq_vals) if eq_vals else None
     curve_pts, cum = [], 0.0
     for t in closed_sorted:
         cum += (t["net_pnl"] or 0)
@@ -617,6 +623,7 @@ def _overview_body() -> str:
     return f"""
 <h2>All accounts</h2>
 <div class='grid'>
+{_card("Portfolio value", _money(total_eq), f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}")}
 {_card("Net P/L", _money(s_all["net"]), f"gross {_money(s_all['gross'])} · fees {_money(s_all['fees'])}", sign=s_all["net"])}
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
@@ -655,11 +662,14 @@ def _account_body(account: str) -> str:
 
     recent = list(reversed(closed_sorted))[:20]
     label = _STRATEGY_LABEL.get(_STRATEGY[account], account)
+    eq_a = eq.get(account)
+    eq_txt = _money(eq_a) if eq_a is not None else "—"
 
     return f"""
 <h2>{account.upper()} <span class='muted' style='font-size:13px'>— {label}</span></h2>
 <div class='muted' style='margin:4px 0 0'>Next evaluation: {schedule.next_label(account)}</div>
 <div class='grid'>
+{_card("Portfolio value", eq_txt, "account equity")}
 {_card("Net P/L", _money(s["net"]), f"gross {_money(s['gross'])} · fees {_money(s['fees'])}", sign=s["net"])}
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
