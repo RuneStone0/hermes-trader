@@ -224,7 +224,10 @@ details.journal .muted{font-weight:400;font-size:12px}
 
 
 def _money(x) -> str:
-    return "—" if x is None else f"${x:,.2f}"
+    """Money formatter used everywhere (uniform sign style: -$1,234.56)."""
+    if x is None:
+        return "—"
+    return f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
 
 
 def _pct(x) -> str:
@@ -558,8 +561,8 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
             f"<td>{_money(r['stop_price'])}</td>"
             f"<td>{_money(r['target_price'])}</td>"
             f"<td>{rr if rr is None else f'{rr:g}'}</td>"
-            f"<td class='neg'>{('-' + _money(ml)) if ml is not None else '—'}</td>"
-            f"<td class='pos'>{('+' + _money(mp)) if mp is not None else '—'}</td>"
+            f"<td class='neg'>{_money(-ml) if ml is not None else '—'}</td>"
+            f"<td class='pos'>{_money(mp) if mp is not None else '—'}</td>"
             f"<td class='{pnl_cls}'>{_money(upl) if upl is not None else '—'}</td></tr>"
         )
         out.append(_detail_row_html(r, eq_acct, ncol))
