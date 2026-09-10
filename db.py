@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS trades (
     rr_planned REAL,                  -- planned reward:risk at entry
     stop_price REAL,
     target_price REAL,
+    last_price REAL,                  -- latest mark for an open position (reconcile)
+    unrealized_pl REAL,               -- open position unrealized P/L (reconcile)
     order_id TEXT,
     client_order_id TEXT,
     note TEXT,
@@ -91,6 +93,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
     if "decision_json" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN decision_json TEXT")
+    if "last_price" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN last_price REAL")
+    if "unrealized_pl" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN unrealized_pl REAL")
     st_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account_state)").fetchall()}
     if "cash" not in st_cols:
         conn.execute("ALTER TABLE account_state ADD COLUMN cash REAL")

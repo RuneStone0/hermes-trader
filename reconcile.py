@@ -60,9 +60,16 @@ def reconcile_account(account: str) -> None:
     for t in db.open_trades(account):
         sym = t["symbol"]
         if sym in positions:
-            # still open -> refresh actual entry price
-            avg = float(positions[sym]["avg_entry_price"])
-            db.update_trade(t["id"], entry_price=round(avg, 4))
+            # Still open -> refresh actual entry price + latest mark & unrealized
+            # P/L (the broker reports both on the position object, so it's free).
+            p = positions[sym]
+            avg = float(p["avg_entry_price"])
+            last, upl = p.get("current_price"), p.get("unrealized_pl")
+            db.update_trade(
+                t["id"], entry_price=round(avg, 4),
+                last_price=(round(float(last), 4) if last not in (None, "") else None),
+                unrealized_pl=(round(float(upl), 2) if upl not in (None, "") else None),
+            )
             continue
 
         # position fully exited -> compute exit from closing fills

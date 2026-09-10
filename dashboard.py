@@ -70,14 +70,26 @@ SYMBOL_INFO = {
 
 
 def _sym_tag(symbol: str) -> str:
-    """A symbol cell that reveals the instrument's full name + description on
-    hover (desktop) or tap (mobile). Data attributes drive a single JS tooltip."""
+    """Symbol cell: the ticker with the instrument's full name beneath it in small
+    muted text (truncated with an ellipsis when long). Hover / tap reveals the
+    name + a one-line description via the shared tooltip. Used by EVERY table so
+    the symbol column looks the same throughout the app."""
     name, desc = SYMBOL_INFO.get(symbol, (f"{symbol}", "Traded instrument."))
     s = html.escape(symbol)
     n = html.escape(name)
     d = html.escape(desc)
-    return (f"<span class='sx' tabindex='0' role='button' "
-            f"data-name='{n}' data-desc='{d}'>{s}</span>")
+    return (f"<span class='sx' tabindex='0' role='button' data-name='{n}' data-desc='{d}'>"
+            f"<span class='syc'>{s}</span><span class='synm'>{n}</span></span>")
+
+
+# Column-header tooltips (hover/tap explains how to read the number). Shared so
+# open positions read identically on the overview and every account page.
+_RR_HINT = ("<span class='hint' tabindex='0' role='button' data-name='Risk : Reward' "
+            "data-desc='Planned reward divided by planned risk. 2.0 means you aim to make "
+            "$2 for every $1 you risk. Higher is better; 1.0 is the break-even minimum.'>R:R</span>")
+_PNL_HINT = ("<span class='hint' tabindex='0' role='button' data-name='Open P&amp;L' "
+             "data-desc='Unrealized profit/loss on this open position, marked to the latest "
+             "price (refreshed by reconcile every ~10 min).'>P&amp;L</span>")
 
 # Trading candlestick favicon (dark card + 3 candles, dashboard palette),
 # inlined as a data URI so the HTML stays fully self-contained.
@@ -155,8 +167,12 @@ tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px s
 .tab.active{background:var(--accent);color:#0d1117}
 .tabs{display:flex;gap:6px;margin:18px 0 4px;flex-wrap:wrap}
 /* --- symbol tooltip --- */
-.sx{position:relative;border-bottom:1px dotted var(--muted);cursor:help;font-weight:600;padding:0 1px}
-.sx:focus-visible{outline:2px solid var(--accent);border-radius:4px}
+/* --- symbol cell (ticker + name) + tooltips --- */
+.sx{position:relative;display:inline-block;cursor:help;vertical-align:middle}
+.syc{display:block;font-weight:600;border-bottom:1px dotted var(--muted)}
+.synm{display:block;font-size:10.5px;color:var(--muted);font-weight:400;line-height:1.25;margin-top:1px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx:focus-visible{outline:2px solid var(--accent);border-radius:4px;outline-offset:2px}
+.hint{border-bottom:1px dotted var(--muted);cursor:help}
 #tip{position:fixed;display:none;z-index:999;max-width:280px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.4;box-shadow:0 10px 28px rgba(0,0,0,.6);pointer-events:none}
 #tip b{display:block;font-size:12.5px;color:var(--text);margin-bottom:2px;white-space:normal}
 #tip span{color:var(--muted)}
@@ -384,6 +400,26 @@ def _risk_usd(r) -> float | None:
     return float(r["qty"]) * _mult(r) * abs(float(r["entry_price"]) - float(r["stop_price"]))
 
 
+def _max_loss(r) -> float | None:
+    """Most the position can lose if the stop fills = |entry − stop| · qty · mult."""
+    return _risk_usd(r)
+
+
+def _max_profit(r) -> float | None:
+    """Most the position can make if the target fills = |target − entry| · qty · mult."""
+    if not r["entry_price"] or not r["target_price"]:
+        return None
+    return abs(float(r["target_price"]) - float(r["entry_price"])) * float(r["qty"]) * _mult(r)
+
+
+def _row_get(r, key):
+    """Read a column that may predate a migration; None when absent/null."""
+    try:
+        return r[key]
+    except (IndexError, KeyError):
+        return None
+
+
 def _fraction(r, eq: float | None, usd: float | None) -> float | None:
     return usd / eq if (eq and usd is not None) else None
 
@@ -483,12 +519,15 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
 
 # --- open positions table --------------------------------------------------- #
 
-_OPEN_TH = ("<tr><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
-            "<th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
+def _open_th(with_account: bool) -> str:
+    acct = "<th>Account</th>" if with_account else ""
+    return (f"<tr><th>Why</th>{acct}<th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
+            f"<th>Entry</th><th>Stop</th><th>Target</th><th>{_RR_HINT}</th>"
+            f"<th>Max loss</th><th>Max profit</th><th>{_PNL_HINT}</th></tr>")
 
 
 def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
-    ncol = 10 if with_account else 9
+    ncol = 13 if with_account else 12
     if not rows:
         return f"<tr><td colspan='{ncol}' class='muted'>No open positions.</td></tr>"
     out = []
@@ -505,6 +544,10 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
         if nf is not None:
             size_txt += f" <span class='muted'>({nf:.1%})</span>"
         rr = _rr_planned(r)
+        ml = _max_loss(r)
+        mp = _max_profit(r)
+        upl = _row_get(r, "unrealized_pl")
+        pnl_cls = "pos" if (upl or 0) > 0 else ("neg" if (upl or 0) < 0 else "muted")
         out.append(
             f"<tr><td>{_dbtn(r['id'])}</td>{acct}"
             f"<td>{_sym_tag(r['symbol'])}</td>"
@@ -514,10 +557,12 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
             f"<td>{_money(r['entry_price'])}</td>"
             f"<td>{_money(r['stop_price'])}</td>"
             f"<td>{_money(r['target_price'])}</td>"
-            f"<td>{rr if rr is None else f'{rr:g}'}</td></tr>"
+            f"<td>{rr if rr is None else f'{rr:g}'}</td>"
+            f"<td class='neg'>{('-' + _money(ml)) if ml is not None else '—'}</td>"
+            f"<td class='pos'>{('+' + _money(mp)) if mp is not None else '—'}</td>"
+            f"<td class='{pnl_cls}'>{_money(upl) if upl is not None else '—'}</td></tr>"
         )
-        colspan = 10 if with_account else 9
-        out.append(_detail_row_html(r, eq_acct, colspan))
+        out.append(_detail_row_html(r, eq_acct, ncol))
     return "".join(out)
 
 
@@ -640,9 +685,9 @@ def _page(title: str, active: str, body: str) -> str:
       else {{ show(el); tip.__el = el; }}
     }});
   }}
-  Array.prototype.forEach.call(document.querySelectorAll('.sx'), attach);
+  Array.prototype.forEach.call(document.querySelectorAll('.sx, .hint'), attach);
   document.addEventListener('click', function(evt){{
-    if (!evt.target.closest('.sx')) {{ hide(); tip.__el = null; }}
+    if (!evt.target.closest('.sx') && !evt.target.closest('.hint')) {{ hide(); tip.__el = null; }}
   }});
   document.addEventListener('scroll', hide, {{passive:true}});
   document.addEventListener('keydown', function(e){{ if(e.key==='Escape') hide(); }});
@@ -661,13 +706,6 @@ def _page(title: str, active: str, body: str) -> str:
 }})();
 </script>
 </body></html>"""
-
-
-def _open_th(with_account: bool) -> str:
-    if with_account:
-        return ("<tr><th>Why</th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
-                "<th>Size</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
-    return _OPEN_TH
 
 
 def _closed_th(with_account: bool) -> str:
