@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS account_state (
     equity REAL,
     cash REAL,
     last_equity REAL,
+    starting_equity REAL,
     updated_at TEXT NOT NULL
 );
 """
@@ -95,6 +96,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE account_state ADD COLUMN cash REAL")
     if "last_equity" not in st_cols:
         conn.execute("ALTER TABLE account_state ADD COLUMN last_equity REAL")
+    if "starting_equity" not in st_cols:
+        conn.execute("ALTER TABLE account_state ADD COLUMN starting_equity REAL")
 
 
 def insert_trade(**fields) -> int:
@@ -204,24 +207,28 @@ def last_event(account: str, strategy: str) -> sqlite3.Row | None:
 
 
 def save_account_state(account: str, equity: float | None = None,
-                       cash: float | None = None, last_equity: float | None = None) -> None:
+                       cash: float | None = None, last_equity: float | None = None,
+                       starting_equity: float | None = None) -> None:
     """Upsert a broker snapshot (equity / cash / last_equity) for an account.
 
     Written by reconcile (every 10 min) so the dashboard can express position
     size / cash / % change without hitting the broker per page view. Uses an
     upsert so callers may snapshot a subset of fields without nulling others.
+    `starting_equity` is SET ONCE — the first non-null value wins and is never
+    overwritten (it's a lifetime baseline, not a moving snapshot).
     """
     conn = connect()
     try:
         conn.execute(
-            "INSERT INTO account_state (account, equity, cash, last_equity, updated_at) "
-            "VALUES (?,?,?,?,?) "
+            "INSERT INTO account_state (account, equity, cash, last_equity, starting_equity, "
+            "updated_at) VALUES (?,?,?,?,?,?) "
             "ON CONFLICT(account) DO UPDATE SET "
             "equity=COALESCE(excluded.equity, account_state.equity), "
             "cash=COALESCE(excluded.cash, account_state.cash), "
             "last_equity=COALESCE(excluded.last_equity, account_state.last_equity), "
+            "starting_equity=COALESCE(account_state.starting_equity, excluded.starting_equity), "
             "updated_at=excluded.updated_at",
-            (account, equity, cash, last_equity, _now()),
+            (account, equity, cash, last_equity, starting_equity, _now()),
         )
         conn.commit()
     finally:
@@ -230,13 +237,16 @@ def save_account_state(account: str, equity: float | None = None,
 
 def account_state() -> dict[str, dict]:
     """Latest known broker snapshot per account:
-    {'daily': {'equity':..,'cash':..,'last_equity':..}, ...}."""
+    {'daily': {'equity':..,'cash':..,'last_equity':..,'starting_equity':..}, ...}."""
     conn = connect()
     try:
         rows = conn.execute(
-            "SELECT account, equity, cash, last_equity FROM account_state").fetchall()
+            "SELECT account, equity, cash, last_equity, starting_equity "
+            "FROM account_state").fetchall()
         return {r["account"]: {"equity": r["equity"], "cash": r["cash"],
-                               "last_equity": r["last_equity"]} for r in rows}
+                               "last_equity": r["last_equity"],
+                               "starting_equity": r["starting_equity"]}
+                for r in rows}
     finally:
         conn.close()
 

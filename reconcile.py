@@ -45,6 +45,7 @@ def reconcile_account(account: str) -> None:
             equity=float(acct.get("equity") or 0.0),
             cash=float(acct.get("cash") or 0.0),
             last_equity=float(acct.get("last_equity") or 0.0) or None,
+            starting_equity=config.STARTING_CAPITAL.get(account),  # set-once baseline
         )
     except (AlpacaError, TypeError, ValueError):
         pass

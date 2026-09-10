@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 # App version (bumped manually on releases; shown in the dashboard footer).
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
@@ -82,6 +82,11 @@ ACCOUNTS = {
 # Market Data API host (bars/quotes/trades/news). Same host for paper & live;
 # the paper-vs-live distinction is carried by the API key, not the host.
 DATA_BASE_URL = "https://data.alpaca.markets"
+
+# Starting capital per paper account — the baseline for the Net P/L % return
+# (realized net P/L ÷ starting capital). Seeded once into account_state by
+# reconcile and never overwritten, so it stays a true lifetime baseline.
+STARTING_CAPITAL = {"daily": 10000.0, "weekly": 10000.0, "yolo": 10000.0}
 
 # --------------------------------------------------------------------------- #
 # Tradable universe (IRREDUCIBLE floor — never disabled by an override)

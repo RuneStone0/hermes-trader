@@ -124,6 +124,7 @@ a{color:inherit}
 .card-title{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 .card-value{font-size:22px;font-weight:600;margin-top:4px}
 .card-sub{color:var(--muted);font-size:12px;margin-top:2px}
+.card-value .amt{font-size:14px;font-weight:500;color:var(--muted);margin-left:7px}
 .pos{color:var(--pos)}.neg{color:var(--neg)}
 .chip{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600;vertical-align:middle;margin-left:7px}
 .chip.pos{color:var(--pos);background:rgba(63,185,80,.13)}
@@ -269,6 +270,36 @@ def _portfolio_card(equity, cash, last_equity, sub: str = "", show_pct: bool = T
     return (f"<div class='card'><div class='card-title'>Portfolio value</div>"
             f"<div class='card-value'>{val}{chip}</div>"
             f"<div class='card-sub'>{sub_txt}</div></div>")
+
+
+def _netpl_card(net, gross, fees, capital) -> str:
+    """Net P/L card: % return vs starting capital (primary), net $ right after,
+    then the gross/fees breakdown. % is fee-inclusive (net)."""
+    pct = None
+    if capital:
+        try:
+            pct = float(net or 0.0) / float(capital) * 100.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            pct = None
+    cls = "pos" if (net or 0) > 0 else ("neg" if (net or 0) < 0 else "")
+    if pct is None:
+        val, amt = _money(net), ""
+    else:
+        sign = "+" if pct > 0 else ""
+        val = f"{sign}{pct:.2f}%"
+        amt = f"<span class='amt'>{_money(net)}</span>"
+    return (f"<div class='card'><div class='card-title'>Net P/L</div>"
+            f"<div class='card-value {cls}'>{val}{amt}</div>"
+            f"<div class='card-sub'>gross {_money(gross)} · fees {_money(fees)}</div></div>")
+
+
+def _starting_capital(account: str, st: dict | None = None) -> float | None:
+    """Baseline capital for an account: the set-once snapshot value, else config."""
+    if st:
+        v = (st.get(account) or {}).get("starting_equity")
+        if v:
+            return float(v)
+    return config.STARTING_CAPITAL.get(account)
 
 
 def _curve(points, w: int = 920, h: int = 240) -> str:
@@ -700,6 +731,7 @@ def _overview_body() -> str:
     total_cash = sum(cash_vals) if cash_vals else None
     le_vals = [s["last_equity"] for s in st.values() if s.get("last_equity") is not None]
     total_le = sum(le_vals) if le_vals else None
+    total_cap = sum(_starting_capital(a, st) or 0 for a in ACCOUNTS) or None
     curve_pts, cum = [], 0.0
     for t in closed_sorted:
         cum += (t["net_pnl"] or 0)
@@ -711,7 +743,7 @@ def _overview_body() -> str:
 <h2>All accounts</h2>
 <div class='grid'>
 {_portfolio_card(total_eq, total_cash, total_le, sub=f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}", show_pct=False)}
-{_card("Net P/L", _money(s_all["net"]), f"gross {_money(s_all['gross'])} · fees {_money(s_all['fees'])}", sign=s_all["net"])}
+{_netpl_card(s_all["net"], s_all["gross"], s_all["fees"], total_cap)}
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
@@ -756,7 +788,7 @@ def _account_body(account: str) -> str:
 <div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong></div>
 <div class='grid'>
 {_portfolio_card(sa.get("equity"), sa.get("cash"), sa.get("last_equity"))}
-{_card("Net P/L", _money(s["net"]), f"gross {_money(s['gross'])} · fees {_money(s['fees'])}", sign=s["net"])}
+{_netpl_card(s["net"], s["gross"], s["fees"], _starting_capital(account, st))}
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
