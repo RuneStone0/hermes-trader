@@ -232,6 +232,9 @@ def _close_action(client, a, positions, dry_run,
     if dry_run:
         return True
     try:
+        n = client.cancel_open_orders_for_symbol(sym)
+        if n:
+            print(f"[yolo] released {n} open order(s) for {sym} before close")
         client.close_position(sym)
     except AlpacaError as e:
         print(f"[yolo] close error {sym}: {e}")

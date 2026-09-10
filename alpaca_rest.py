@@ -18,6 +18,15 @@ class AlpacaError(Exception):
     pass
 
 
+# Alpaca statuses that mean "this order is still live and may be holding
+# position shares". Mirror of selfheal.OPEN_STATUSES (kept separate to avoid a
+# selfheal -> alpaca_rest import cycle).
+OPEN_ORDER_STATUSES = (
+    "new", "accepted", "held", "partially_filled",
+    "pending_new", "pending_cancel", "pending_replace",
+)
+
+
 def _round2(x: float) -> str:
     return f"{x:.2f}"
 
@@ -82,6 +91,25 @@ class AlpacaClient:
 
     def cancel_order(self, order_id: str) -> dict:
         return self._request("DELETE", f"/v2/orders/{order_id}")
+
+    def cancel_open_orders_for_symbol(self, symbol: str) -> int:
+        """Cancel every still-live order for `symbol` and return the count.
+
+        A position's bracket legs (stop + target) hold its full qty, so a
+        DELETE /v2/positions/{symbol} close 403s with 'insufficient qty
+        available' until they are released. Call this first, then close.
+        Best-effort: a cancel failure is skipped — if the close still 403s the
+        caller's error path surfaces it.
+        """
+        cancelled = 0
+        for o in self.orders_all(limit=200):
+            if o.get("symbol") == symbol and o.get("status") in OPEN_ORDER_STATUSES:
+                try:
+                    self.cancel_order(o["id"])
+                except AlpacaError:
+                    continue
+                cancelled += 1
+        return cancelled
 
     def submit_order(self, order: dict) -> dict:
         return self._request("POST", "/v2/orders", body=order)
