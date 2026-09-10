@@ -34,6 +34,29 @@ def _ts(s: str) -> datetime | None:
         return None
 
 
+def _classify_close(client: AlpacaClient, closing_fills: list) -> str | None:
+    """Why a position closed, from the broker's own closing order type:
+    stop/stop_limit -> 'stop', limit -> 'target', market -> 'market', else 'other'.
+    Returns None when it can't be determined (dashboard falls back to a price
+    heuristic). One order lookup per closing fill — cheap and only on close."""
+    for f in closing_fills:
+        oid = f.get("order_id")
+        if not oid:
+            continue
+        try:
+            o = client.order(oid)
+        except AlpacaError:
+            continue
+        t = (o.get("type") or "").lower()
+        if t in ("stop", "stop_limit"):
+            return "stop"
+        if t == "limit":
+            return "target"
+        if t == "market":
+            return "market"
+    return "other"
+
+
 def reconcile_account(account: str) -> None:
     client = AlpacaClient(account)
     # Snapshot equity/cash/last_equity for the dashboard's size-% column and
@@ -96,6 +119,7 @@ def reconcile_account(account: str) -> None:
             t["id"], exit_price=round(exit_px, 4), status="closed",
             gross_pnl=round(gross, 2), fees=f, net_pnl=round(gross - f, 2),
             exit_time=closing[0].get("transaction_time"),
+            close_reason=_classify_close(client, closing),
         )
         print(f"[{account}] closed {sym} {t['side']} x{qty:g}: "
               f"gross ${gross:.2f} fees ${f:.2f} net ${gross-f:.2f}")

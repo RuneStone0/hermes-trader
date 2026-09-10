@@ -471,14 +471,26 @@ def _row_get(r, key):
 def _close_reason(r):
     """For a CLOSED trade: why it closed -> (label, detail).
 
-    Stop/target fills are matched by exit price (most reliable); otherwise the
-    LLM's close rationale; else a generic 'exited'. Pure derivation from stored
-    fields — no schema change needed."""
+    Prefers the EXACT reason reconcile recorded from the broker's closing order
+    type ('stop'/'target'/'market'); falls back to a price heuristic for older
+    trades where it wasn't captured. Derivation only — never calls the broker."""
     if r["status"] != "closed":
         return None
     dj = _parse_json(r["decision_json"]) or {}
+    rat = dj.get("close_rationale")
     exit_px = r["exit_price"]
+    raw = _row_get(r, "close_reason")
+    if raw == "stop":
+        return ("Stop-loss hit", f"stop order filled at {_money(exit_px)}")
+    if raw == "target":
+        return ("Target hit", f"take-profit filled at {_money(exit_px)}")
+    if raw == "market":
+        return (("Closed by the LLM" if rat else "Closed at market"),
+                str(rat) if rat else f"market exit at {_money(exit_px)}")
+    if raw == "other":
+        return ("Closed", f"exit at {_money(exit_px)}")
 
+    # Fallback (older trades missing the recorded reason): price heuristic.
     def near(px, ref):
         try:
             px, ref = float(px), float(ref)
@@ -487,13 +499,11 @@ def _close_reason(r):
         return ref != 0 and abs(px - ref) <= max(0.005 * abs(ref), 0.02)
 
     if near(exit_px, r["stop_price"]):
-        return ("Stop-loss hit",
-                f"exit {_money(exit_px)} ≈ stop {_money(r['stop_price'])}")
+        return ("Stop-loss hit", f"exit {_money(exit_px)} ≈ stop {_money(r['stop_price'])}")
     if near(exit_px, r["target_price"]):
-        return ("Target hit",
-                f"exit {_money(exit_px)} ≈ target {_money(r['target_price'])}")
-    if dj.get("close_rationale"):
-        return ("Closed by the LLM", str(dj["close_rationale"]))
+        return ("Target hit", f"exit {_money(exit_px)} ≈ target {_money(r['target_price'])}")
+    if rat:
+        return ("Closed by the LLM", str(rat))
     return ("Closed", "position exited (no stop/target match)")
 
 
