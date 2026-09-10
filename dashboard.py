@@ -126,15 +126,13 @@ a{color:inherit}
 .card-sub{color:var(--muted);font-size:12px;margin-top:2px}
 .card-value .amt{font-size:14px;font-weight:500;color:var(--muted);margin-left:7px}
 .pos{color:var(--pos)}.neg{color:var(--neg)}
-.chip{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600;vertical-align:middle;margin-left:7px}
-.chip.pos{color:var(--pos);background:rgba(63,185,80,.13)}
-.chip.neg{color:var(--neg);background:rgba(248,81,73,.13)}
-.chip.flat{color:var(--muted);background:rgba(139,148,158,.14)}
 .accts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .acct{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:var(--text);display:block;transition:border-color .15s,transform .15s}
 .acct:hover{border-color:var(--accent)}
 .acct:active{transform:scale(.995)}
 .panel{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:4px 0;margin-top:14px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.panel-sub{padding:13px 12px 7px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.panel-sub.sep{border-top:1px solid var(--border);margin-top:4px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:10px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
 th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.04em;padding-top:11px;padding-bottom:11px}
@@ -239,42 +237,28 @@ def _card(title: str, value: str, sub: str = "", sign=None) -> str:
             f"<div class='card-sub'>{sub}</div></div>")
 
 
-def _pct_chip(pct: float | None) -> str:
-    """A small colored pill for a signed percentage, e.g. '+0.09%' / '-0.11%'."""
-    if pct is None:
-        return ""
-    cls = "pos" if pct > 0 else ("neg" if pct < 0 else "flat")
-    sign = "+" if pct > 0 else ""
-    return f"<span class='chip {cls}'>{sign}{pct:.2f}%</span>"
+def _portfolio_card(equity, cash, sub: str = "") -> str:
+    """Portfolio value card: equity + a Cash line.
 
-
-def _change_pct(equity, last_equity) -> float | None:
-    """% change of equity vs the account's last-close equity (None if unknown)."""
-    if equity is None or not last_equity:
-        return None
-    eq, le = float(equity), float(last_equity)
-    return (eq - le) / le * 100.0 if le > 0 else None
-
-
-def _portfolio_card(equity, cash, last_equity, sub: str = "", show_pct: bool = True) -> str:
-    """Portfolio value card: equity, % change vs last close, and a Cash line.
-
-    show_pct=False for cross-account aggregates (the combined % is meaningless
-    when accounts started independently) — per-account cards still carry one.
+    No % chip — the 'vs last close' daily change read as noise (often 0.00%
+    overnight/after-hours). The meaningful lifetime return lives on the Net P/L card.
     """
     eq = float(equity) if equity is not None else None
     val = _money(eq) if eq is not None else "—"
-    chip = _pct_chip(_change_pct(equity, last_equity)) if show_pct else ""
     cash_txt = _money(cash) if cash is not None else "—"
     sub_txt = f"Cash: {cash_txt}" + (f" · {sub}" if sub else "")
     return (f"<div class='card'><div class='card-title'>Portfolio value</div>"
-            f"<div class='card-value'>{val}{chip}</div>"
+            f"<div class='card-value'>{val}</div>"
             f"<div class='card-sub'>{sub_txt}</div></div>")
 
 
-def _netpl_card(net, gross, fees, capital) -> str:
-    """Net P/L card: % return vs starting capital (primary), net $ right after,
-    then the gross/fees breakdown. % is fee-inclusive (net)."""
+def _netpl_card(net, capital) -> str:
+    """Net P/L card: % return vs starting capital (primary), then the net $.
+
+    The % is fee-inclusive (net). The gross/fees breakdown is intentionally NOT
+    shown (it duplicated the $ figure and the per-trade fees already live in the
+    decision-log detail).
+    """
     pct = None
     if capital:
         try:
@@ -289,8 +273,7 @@ def _netpl_card(net, gross, fees, capital) -> str:
         val = f"{sign}{pct:.2f}%"
         amt = f"<span class='amt'>{_money(net)}</span>"
     return (f"<div class='card'><div class='card-title'>Net P/L</div>"
-            f"<div class='card-value {cls}'>{val}{amt}</div>"
-            f"<div class='card-sub'>gross {_money(gross)} · fees {_money(fees)}</div></div>")
+            f"<div class='card-value {cls}'>{val}{amt}</div></div>")
 
 
 def _starting_capital(account: str, st: dict | None = None) -> float | None:
@@ -680,12 +663,38 @@ def _page(title: str, active: str, body: str) -> str:
 </body></html>"""
 
 
-def _open_positions_block(rows, eq: dict, with_account: bool = False) -> str:
-    th = _OPEN_TH
+def _open_th(with_account: bool) -> str:
     if with_account:
-        th = ("<tr><th>Why</th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
-              "<th>Size</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
-    return f"<div class='panel'><table>{th}{_open_rows(rows, eq, with_account)}</table></div>"
+        return ("<tr><th>Why</th><th>Account</th><th>Symbol</th><th>Side</th><th>Qty</th>"
+                "<th>Size</th><th>Entry</th><th>Stop</th><th>Target</th><th>R:R</th></tr>")
+    return _OPEN_TH
+
+
+def _closed_th(with_account: bool) -> str:
+    if with_account:
+        return ("<tr><th>Closed</th><th>Why</th><th>Account</th><th>Strategy</th><th>Symbol</th>"
+                "<th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>")
+    return ("<tr><th>Closed</th><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th>"
+            "<th>Entry</th><th>Exit</th><th>Net P/L</th></tr>")
+
+
+def _positions_trades_block(open_rows, closed_rows, eq: dict, with_account: bool = False) -> str:
+    """One box holding open positions (current state) then recent closed trades
+    (history). Each keeps its own columns, so they sit as two labelled tables in
+    a single panel — fewer page sections, no column mismatch."""
+    n_open, n_closed = len(open_rows), len(closed_rows)
+    open_lbl = (f"Open positions <span class='muted'>· {n_open}</span>"
+                if n_open else "Open positions")
+    closed_lbl = (f"Recent closed trades <span class='muted'>· {n_closed}</span>"
+                  if n_closed else "Recent closed trades")
+    return (
+        f"<div class='panel'>"
+        f"<div class='panel-sub'>{open_lbl}</div>"
+        f"<table>{_open_th(with_account)}{_open_rows(open_rows, eq, with_account)}</table>"
+        f"<div class='panel-sub sep'>{closed_lbl}</div>"
+        f"<table>{_closed_th(with_account)}{_closed_rows(closed_rows, with_account)}</table>"
+        f"</div>"
+    )
 
 
 def _overview_body() -> str:
@@ -711,14 +720,12 @@ def _overview_body() -> str:
                      f"next: {schedule.next_label(a, now)}</div>")
         eq_a = eq.get(a)
         eq_txt = _money(eq_a) if eq_a is not None else "—"
-        sa = st.get(a, {})
-        chip = _pct_chip(_change_pct(sa.get("equity"), sa.get("last_equity")))
         net_cls = "pos" if s["net"] > 0 else ("neg" if s["net"] < 0 else "")
         acct_cards.append(
             f"<a class='acct' href='/{a}'>"
             f"<h3>{a.upper()}</h3>"
             f"<div class='card-title' style='margin-top:2px'>Portfolio value</div>"
-            f"<div class='big'>{eq_txt}{chip}</div>"
+            f"<div class='big'>{eq_txt}</div>"
             f"<div class='{net_cls}' style='margin-top:6px'>{_money(s['net'])} <span class='muted'>net</span></div>"
             f"<div class='muted' style='margin-top:2px'>{s['n']} trades · {s['win_rate']:.0%} win · fees {_money(s['fees'])}</div>"
             f"{next_line}{last_line}</a>"
@@ -729,8 +736,6 @@ def _overview_body() -> str:
     total_eq = sum(eq_vals) if eq_vals else None
     cash_vals = [s["cash"] for s in st.values() if s.get("cash") is not None]
     total_cash = sum(cash_vals) if cash_vals else None
-    le_vals = [s["last_equity"] for s in st.values() if s.get("last_equity") is not None]
-    total_le = sum(le_vals) if le_vals else None
     total_cap = sum(_starting_capital(a, st) or 0 for a in ACCOUNTS) or None
     curve_pts, cum = [], 0.0
     for t in closed_sorted:
@@ -742,25 +747,21 @@ def _overview_body() -> str:
     return f"""
 <h2>All accounts</h2>
 <div class='grid'>
-{_portfolio_card(total_eq, total_cash, total_le, sub=f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}", show_pct=False)}
-{_netpl_card(s_all["net"], s_all["gross"], s_all["fees"], total_cap)}
+{_portfolio_card(total_eq, total_cash, sub=f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}")}
+{_netpl_card(s_all["net"], total_cap)}
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
 </div>
 
-<h2>Open positions</h2>
-{_open_positions_block(open_t, eq, with_account=True)}
+<h2>Positions &amp; trades</h2>
+{_positions_trades_block(open_t, recent, eq, with_account=True)}
 
 <h2>Accounts</h2>
 <div class='accts'>{''.join(acct_cards)}</div>
 
 <h2>Equity curve (cumulative net P/L)</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
-
-<h2>Recent closed trades</h2>
-<div class='panel'><table><tr><th>Closed</th><th>Why</th><th>Account</th><th>Strategy</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
-{_closed_rows(recent)}</table></div>
 """
 
 
@@ -787,22 +788,18 @@ def _account_body(account: str) -> str:
     return f"""
 <div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong></div>
 <div class='grid'>
-{_portfolio_card(sa.get("equity"), sa.get("cash"), sa.get("last_equity"))}
-{_netpl_card(s["net"], s["gross"], s["fees"], _starting_capital(account, st))}
+{_portfolio_card(sa.get("equity"), sa.get("cash"))}
+{_netpl_card(s["net"], _starting_capital(account, st))}
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
 </div>
 
-<h2>Open positions</h2>
-{_open_positions_block(open_t, eq)}
+<h2>Positions &amp; trades</h2>
+{_positions_trades_block(open_t, recent, eq, with_account=False)}
 
 <h2>Equity curve</h2>
 <div class='panel'>{_curve(curve_pts)}</div>
-
-<h2>Recent closed trades</h2>
-<div class='panel'><table><tr><th>Closed</th><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>
-{_closed_rows(recent, with_account=False)}</table></div>
 
 <details class='journal'><summary>Decision journal <span class='muted'>— every go / no-go / skip / error this bot logged (latest {len(events)})</span></summary>
 <div class='panel'><table><tr><th>Time</th><th>Decision</th><th>Reason</th></tr>
