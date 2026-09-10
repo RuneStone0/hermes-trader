@@ -71,15 +71,11 @@ SYMBOL_INFO = {
 
 def _sym_tag(symbol: str) -> str:
     """Symbol cell: the ticker with the instrument's full name beneath it in small
-    muted text (truncated with an ellipsis when long). Hover / tap reveals the
-    name + a one-line description via the shared tooltip. Used by EVERY table so
-    the symbol column looks the same throughout the app."""
-    name, desc = SYMBOL_INFO.get(symbol, (f"{symbol}", "Traded instrument."))
+    muted text (ellipsis-truncated when long). No tooltip — the name is shown."""
+    name, _desc = SYMBOL_INFO.get(symbol, (str(symbol), ""))
     s = html.escape(symbol)
     n = html.escape(name)
-    d = html.escape(desc)
-    return (f"<span class='sx' tabindex='0' role='button' data-name='{n}' data-desc='{d}'>"
-            f"<span class='syc'>{s}</span><span class='synm'>{n}</span></span>")
+    return f"<span class='sym'><span class='syc'>{s}</span><span class='synm'>{n}</span></span>"
 
 
 # Column-header tooltips (hover/tap explains how to read the number). Shared so
@@ -151,9 +147,10 @@ th{color:var(--muted);font-weight:500;text-transform:uppercase;font-size:11px;le
 td:first-child,th:first-child{padding-left:12px}
 td:last-child,th:last-child{padding-right:12px}
 tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px solid var(--border)}
-.curve{width:100%;height:auto;background:var(--card);border:1px solid var(--border);border-radius:10px;display:block}
-.curve path{fill:none;stroke:var(--accent);stroke-width:2}
-.curve .zero{stroke:var(--border);stroke-dasharray:4 4}
+.curve-card{grid-column:1/-1;padding:12px 14px 10px}
+.spark{width:100%;height:auto;display:block;margin-top:4px}
+.spark path{fill:none;stroke:var(--accent);stroke-width:2}
+.spark .zero{stroke:var(--border);stroke-dasharray:4 4}
 .footer{color:var(--muted);font-size:12px;margin-top:28px;padding-top:16px;border-top:1px solid var(--border);line-height:1.6}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
 /* --- sticky top menu bar (title + nav, saves page space) --- */
@@ -166,13 +163,12 @@ tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px s
 .tab:hover{color:var(--text);background:var(--card2)}
 .tab.active{background:var(--accent);color:#0d1117}
 .tabs{display:flex;gap:6px;margin:18px 0 4px;flex-wrap:wrap}
-/* --- symbol tooltip --- */
-/* --- symbol cell (ticker + name) + tooltips --- */
-.sx{position:relative;display:inline-block;cursor:help;vertical-align:middle}
-.syc{display:block;font-weight:600;border-bottom:1px dotted var(--muted)}
-.synm{display:block;font-size:10.5px;color:var(--muted);font-weight:400;line-height:1.25;margin-top:1px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sx:focus-visible{outline:2px solid var(--accent);border-radius:4px;outline-offset:2px}
+/* --- symbol cell (ticker + name) + header hints --- */
+.sym{display:inline-block;vertical-align:middle;max-width:160px}
+.syc{display:block;font-weight:600}
+.synm{display:block;font-size:10.5px;color:var(--muted);font-weight:400;line-height:1.25;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hint{border-bottom:1px dotted var(--muted);cursor:help}
+.hint:focus-visible{outline:2px solid var(--accent);border-radius:3px}
 #tip{position:fixed;display:none;z-index:999;max-width:280px;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.4;box-shadow:0 10px 28px rgba(0,0,0,.6);pointer-events:none}
 #tip b{display:block;font-size:12.5px;color:var(--text);margin-bottom:2px;white-space:normal}
 #tip span{color:var(--muted)}
@@ -304,32 +300,41 @@ def _starting_capital(account: str, st: dict | None = None) -> float | None:
     return config.STARTING_CAPITAL.get(account)
 
 
-def _curve(points, w: int = 920, h: int = 240) -> str:
-    if not points:
-        return ("<div class='muted' style='padding:20px'>No closed trades yet — "
-                "the equity curve appears here.</div>")
+def _sparkline(points, w: int = 920, h: int = 60) -> str:
+    """A short, axis-less equity sparkline (fits inside a card)."""
     ys = [p[1] for p in points]
     lo, hi = min(ys), max(ys)
     if lo == hi:
         hi = lo + 1
     span = (hi - lo) or 1.0
-    lo -= span * 0.08
-    hi += span * 0.08
+    lo -= span * 0.1
+    hi += span * 0.1
     n = len(points)
 
     def sx(i: int) -> float:
-        return w / 2 if n == 1 else 24 + i / (n - 1) * (w - 48)
+        return w / 2 if n == 1 else 6 + i / (n - 1) * (w - 12)
 
     def sy(y: float) -> float:
-        return h - 24 - (y - lo) / (hi - lo) * (h - 48)
+        return h - 4 - (y - lo) / (hi - lo) * (h - 8)
 
     d = " ".join(("M" if i == 0 else "L") + f"{sx(i):.1f},{sy(p[1]):.1f}"
                  for i, p in enumerate(points))
     zero = ""
     if lo <= 0 <= hi:
         zy = sy(0.0)
-        zero = f"<line x1='24' y1='{zy:.1f}' x2='{w-24}' y2='{zy:.1f}' class='zero'/>"
-    return f"<svg viewBox='0 0 {w} {h}' class='curve'>{zero}<path d='{d}'/></svg>"
+        zero = f"<line x1='6' y1='{zy:.1f}' x2='{w-6}' y2='{zy:.1f}' class='zero'/>"
+    return f"<svg viewBox='0 0 {w} {h}' class='spark'>{zero}<path d='{d}'/></svg>"
+
+
+def _curve_card(points) -> str:
+    """Compact equity-curve card (a tiny sparkline) for the top summary grid."""
+    title = ("<div class='card-title'>Equity curve "
+             "<span class='muted' style='text-transform:none;letter-spacing:0'>"
+             "cumulative net P/L</span></div>")
+    if not points:
+        return (f"<div class='card curve-card'>{title}"
+                f"<div class='card-sub'>No closed trades yet.</div></div>")
+    return f"<div class='card curve-card'>{title}{_sparkline(points)}</div>"
 
 
 def _fmt_ts(s: str) -> str:
@@ -338,6 +343,46 @@ def _fmt_ts(s: str) -> str:
         return dt.strftime("%m-%d %H:%M")
     except ValueError:
         return s or ""
+
+
+def _as_dt(s: str):
+    try:
+        dt = datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _within_hours(s: str, hours: int) -> bool:
+    dt = _as_dt(s)
+    if dt is None:
+        return False
+    return (datetime.now(timezone.utc) - dt).total_seconds() <= hours * 3600
+
+
+def _when_tag(s: str) -> str:
+    """Human-readable time (relative for recent, date for older) with a tooltip
+    carrying the exact UTC timestamp."""
+    dt = _as_dt(s)
+    if dt is None:
+        return html.escape(s or "")
+    secs = (datetime.now(timezone.utc) - dt).total_seconds()
+    if secs < 60:
+        label = "just now"
+    elif secs < 3600:
+        label = f"{int(secs // 60)}m ago"
+    elif secs < 86400:
+        label = f"{int(secs // 3600)}h ago"
+    elif secs < 172800:
+        label = "yesterday"
+    elif secs < 7 * 86400:
+        label = f"{int(secs // 86400)}d ago"
+    else:
+        label = f"{dt.strftime('%b')} {dt.day}"
+    exact = dt.astimezone(timezone.utc).strftime("%a %Y-%m-%d %H:%M UTC")
+    return (f"<span class='hint' tabindex='0' role='button' "
+            f"data-name='{html.escape(exact)}' data-desc='exact close time (UTC)'>"
+            f"{html.escape(label)}</span>")
 
 
 def _event_badge(decision: str) -> str:
@@ -423,6 +468,35 @@ def _row_get(r, key):
         return None
 
 
+def _close_reason(r):
+    """For a CLOSED trade: why it closed -> (label, detail).
+
+    Stop/target fills are matched by exit price (most reliable); otherwise the
+    LLM's close rationale; else a generic 'exited'. Pure derivation from stored
+    fields — no schema change needed."""
+    if r["status"] != "closed":
+        return None
+    dj = _parse_json(r["decision_json"]) or {}
+    exit_px = r["exit_price"]
+
+    def near(px, ref):
+        try:
+            px, ref = float(px), float(ref)
+        except (TypeError, ValueError):
+            return False
+        return ref != 0 and abs(px - ref) <= max(0.005 * abs(ref), 0.02)
+
+    if near(exit_px, r["stop_price"]):
+        return ("Stop-loss hit",
+                f"exit {_money(exit_px)} ≈ stop {_money(r['stop_price'])}")
+    if near(exit_px, r["target_price"]):
+        return ("Target hit",
+                f"exit {_money(exit_px)} ≈ target {_money(r['target_price'])}")
+    if dj.get("close_rationale"):
+        return ("Closed by the LLM", str(dj["close_rationale"]))
+    return ("Closed", "position exited (no stop/target match)")
+
+
 def _fraction(r, eq: float | None, usd: float | None) -> float | None:
     return usd / eq if (eq and usd is not None) else None
 
@@ -494,13 +568,13 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
     secs: list[tuple[str, str, bool]] = []
     if rationale:
         secs.append(("Why", html.escape(str(rationale)), True))
+    cr = _close_reason(r)
+    if cr:
+        secs.append((f"Close reason · {cr[0]}", html.escape(cr[1]), False))
     if ctx.get("technical"):
         secs.append(("Setup", html.escape(str(ctx["technical"])), False))
     if ctx.get("market_regime"):
         secs.append(("Regime", html.escape(str(ctx["market_regime"])), False))
-    close_rat = (dj or {}).get("close_rationale")
-    if close_rat:
-        secs.append(("Exit reason", html.escape(str(close_rat)), False))
     if ctx.get("recent_performance"):
         secs.append(("Recent", html.escape(str(ctx["recent_performance"])), False))
     secs_html = "".join(
@@ -525,12 +599,11 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
 def _open_th(with_account: bool) -> str:
     acct = "<th>Account</th>" if with_account else ""
     return (f"<tr><th>Why</th>{acct}<th>Symbol</th><th>Side</th><th>Qty</th><th>Size</th>"
-            f"<th>Entry</th><th>Stop</th><th>Target</th><th>{_RR_HINT}</th>"
-            f"<th>Max loss</th><th>Max profit</th><th>{_PNL_HINT}</th></tr>")
+            f"<th>Entry</th><th>Stop</th><th>Target</th><th>{_RR_HINT}</th><th>{_PNL_HINT}</th></tr>")
 
 
 def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
-    ncol = 13 if with_account else 12
+    ncol = 11 if with_account else 10
     if not rows:
         return f"<tr><td colspan='{ncol}' class='muted'>No open positions.</td></tr>"
     out = []
@@ -546,9 +619,20 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
         nf = _fraction(r, eq_acct, notional)
         if nf is not None:
             size_txt += f" <span class='muted'>({nf:.1%})</span>"
+        # R:R cell: the tooltip carries this position's $ max loss / max profit
+        # (saves two columns; the header tooltip explains how to read R:R).
         rr = _rr_planned(r)
-        ml = _max_loss(r)
-        mp = _max_profit(r)
+        rr_val = "—" if rr is None else f"{rr:g}"
+        ml, mp = _max_loss(r), _max_profit(r)
+        bits = ([f"Max loss {_money(-ml)}"] if ml is not None else []) + \
+               ([f"Max profit {_money(mp)}"] if mp is not None else [])
+        if bits:
+            name = html.escape(f"Risk : Reward {rr_val}" if rr is not None else "Risk : Reward")
+            desc = html.escape(" · ".join(bits) + ". Higher R:R is better; 1.0 is break-even.")
+            rr_cell = (f"<span class='hint' tabindex='0' role='button' "
+                       f"data-name='{name}' data-desc='{desc}'>{rr_val}</span>")
+        else:
+            rr_cell = rr_val
         upl = _row_get(r, "unrealized_pl")
         pnl_cls = "pos" if (upl or 0) > 0 else ("neg" if (upl or 0) < 0 else "muted")
         out.append(
@@ -560,9 +644,7 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
             f"<td>{_money(r['entry_price'])}</td>"
             f"<td>{_money(r['stop_price'])}</td>"
             f"<td>{_money(r['target_price'])}</td>"
-            f"<td>{rr if rr is None else f'{rr:g}'}</td>"
-            f"<td class='neg'>{_money(-ml) if ml is not None else '—'}</td>"
-            f"<td class='pos'>{_money(mp) if mp is not None else '—'}</td>"
+            f"<td>{rr_cell}</td>"
             f"<td class='{pnl_cls}'>{_money(upl) if upl is not None else '—'}</td></tr>"
         )
         out.append(_detail_row_html(r, eq_acct, ncol))
@@ -585,7 +667,7 @@ def _closed_rows(rows, with_account: bool = True) -> str:
             acct = (f"<td>{html.escape(r['account'])}</td>"
                     f"<td class='muted'>{_STRATEGY_LABEL.get(r['strategy'], r['strategy'])}</td>")
         out.append(
-            f"<tr><td class='muted'>{_fmt_ts(r['exit_time'] or r['created_at'])}</td>"
+            f"<tr><td class='muted'>{_when_tag(r['exit_time'] or r['created_at'])}</td>"
             f"<td>{_dbtn(r['id'])}</td>{acct}"
             f"<td>{_sym_tag(r['symbol'])}</td>"
             f"<td class='{side_cls}'>{html.escape(r['side'])}</td>"
@@ -688,9 +770,9 @@ def _page(title: str, active: str, body: str) -> str:
       else {{ show(el); tip.__el = el; }}
     }});
   }}
-  Array.prototype.forEach.call(document.querySelectorAll('.sx, .hint'), attach);
+  Array.prototype.forEach.call(document.querySelectorAll('.hint'), attach);
   document.addEventListener('click', function(evt){{
-    if (!evt.target.closest('.sx') && !evt.target.closest('.hint')) {{ hide(); tip.__el = null; }}
+    if (!evt.target.closest('.hint')) {{ hide(); tip.__el = null; }}
   }});
   document.addEventListener('scroll', hide, {{passive:true}});
   document.addEventListener('keydown', function(e){{ if(e.key==='Escape') hide(); }});
@@ -720,22 +802,33 @@ def _closed_th(with_account: bool) -> str:
 
 
 def _positions_trades_block(open_rows, closed_rows, eq: dict, with_account: bool = False) -> str:
-    """One box holding open positions (current state) then recent closed trades
-    (history). Each keeps its own columns, so they sit as two labelled tables in
-    a single panel — fewer page sections, no column mismatch."""
-    n_open, n_closed = len(open_rows), len(closed_rows)
-    open_lbl = (f"Open positions <span class='muted'>· {n_open}</span>"
-                if n_open else "Open positions")
-    closed_lbl = (f"Recent closed trades <span class='muted'>· {n_closed}</span>"
-                  if n_closed else "Recent closed trades")
+    """One box, two labelled tables: open positions, then recent (48h) closed
+    trades. Rows differ between them, so they stay separate tables inside a
+    single panel — fewer page sections, no column mismatch."""
     return (
         f"<div class='panel'>"
-        f"<div class='panel-sub'>{open_lbl}</div>"
+        f"<div class='panel-sub'>Open positions</div>"
         f"<table>{_open_th(with_account)}{_open_rows(open_rows, eq, with_account)}</table>"
-        f"<div class='panel-sub sep'>{closed_lbl}</div>"
+        f"<div class='panel-sub sep'>Recent closed trades</div>"
         f"<table>{_closed_th(with_account)}{_closed_rows(closed_rows, with_account)}</table>"
         f"</div>"
     )
+
+
+def _trade_log(closed_sorted, with_account: bool = True) -> str:
+    """Collapsible full trade log — every closed trade, newest first (the
+    'Recent closed trades' box only shows the last 48h). Pagination is a future
+    step; capped at 200 rows so the page stays light."""
+    rows = list(reversed(closed_sorted))
+    if not rows:
+        return ""
+    shown = rows[:200]
+    extra = (f" <span class='muted'>· latest {len(shown)} of {len(rows)}</span>"
+             if len(rows) > len(shown) else "")
+    return (f"<details class='journal'><summary>Trade log "
+            f"<span class='muted'>— all closed trades{extra}</span></summary>"
+            f"<div class='panel'><table>{_closed_th(with_account)}"
+            f"{_closed_rows(shown, with_account)}</table></div></details>")
 
 
 def _overview_body() -> str:
@@ -783,7 +876,8 @@ def _overview_body() -> str:
         cum += (t["net_pnl"] or 0)
         curve_pts.append((t["exit_time"], cum))
 
-    recent = list(reversed(closed_sorted))[:20]
+    recent = [t for t in reversed(closed_sorted)
+              if _within_hours(t["exit_time"] or t["created_at"], 48)]
 
     return f"""
 <h2>All accounts</h2>
@@ -793,6 +887,7 @@ def _overview_body() -> str:
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
+{_curve_card(curve_pts)}
 </div>
 
 <h2>Positions &amp; trades</h2>
@@ -801,8 +896,7 @@ def _overview_body() -> str:
 <h2>Accounts</h2>
 <div class='accts'>{''.join(acct_cards)}</div>
 
-<h2>Equity curve (cumulative net P/L)</h2>
-<div class='panel'>{_curve(curve_pts)}</div>
+{_trade_log(closed_sorted, with_account=True)}
 """
 
 
@@ -822,7 +916,8 @@ def _account_body(account: str) -> str:
         cum += (t["net_pnl"] or 0)
         curve_pts.append((t["exit_time"], cum))
 
-    recent = list(reversed(closed_sorted))[:20]
+    recent = [t for t in reversed(closed_sorted)
+              if _within_hours(t["exit_time"] or t["created_at"], 48)]
     label = _STRATEGY_LABEL.get(_STRATEGY[account], account)
     sa = st.get(account, {})
 
@@ -834,13 +929,13 @@ def _account_body(account: str) -> str:
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
+{_curve_card(curve_pts)}
 </div>
 
 <h2>Positions &amp; trades</h2>
 {_positions_trades_block(open_t, recent, eq, with_account=False)}
 
-<h2>Equity curve</h2>
-<div class='panel'>{_curve(curve_pts)}</div>
+{_trade_log(closed_sorted, with_account=False)}
 
 <details class='journal'><summary>Decision journal <span class='muted'>— every go / no-go / skip / error this bot logged (latest {len(events)})</span></summary>
 <div class='panel'><table><tr><th>Time</th><th>Decision</th><th>Reason</th></tr>
