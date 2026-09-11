@@ -23,7 +23,10 @@ Rules (each individually toggled in config.SELFHEAL):
 
 Market-open gating: order placement uses TIF 'day' while the market is open
 and 'gtc' after the close (so a position that legitimately survives overnight
-keeps its stop — the user's hard 'always a stop-loss' rule).
+keeps its stop — the user's hard 'always a stop-loss' rule). If the broker's
+clock endpoint is DOWN the market state is UNKNOWN -> use the after-hours TIF
+(gtc, accepted open or closed) and keep running R1-R4; a clock outage must
+never disable the protective pass.
 
 Usage: python3 selfheal.py [account] [--dry-run]
 """
@@ -80,15 +83,21 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
     if not config.SELFHEAL.get("enabled", True):
         return
     client = AlpacaClient(account)
+    # Market state is used ONLY to pick the TIF of NEW protection legs (R2).
+    # A broker-side clock outage must NOT abort the pass: R1/R3/R4 need no
+    # market state at all, and with the state UNKNOWN R2 uses the conservative
+    # after-hours TIF (gtc), which the broker accepts open or closed. Aborting
+    # here left positions unprotected AND unverified for a whole outage
+    # (2026-09-11 /v2/clock HTTP 500 for ~1h).
+    market_open: bool | None = None
     try:
         clock = client.clock()
+        market_open = bool(clock.get("is_open"))
     except AlpacaError as e:
         # Repeated broker-side clock failures are a no-op/waiting state, not a
         # new event per tick: dedup keeps one row (daily/weekly/yolo_run do the
         # same for clock errors) instead of 3 new error events every 10 min.
         _log(account, "error", f"clock unavailable: {e}", dedup=True)
-        return
-    market_open = bool(clock.get("is_open"))
 
     positions = {p["symbol"]: p for p in client.positions()}
     open_orders = [o for o in client.orders_all(limit=200)
