@@ -9,13 +9,58 @@ Fail-closed: any error, or a "no_go", means NO trade is placed.
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.request
 
 import config
 
+# Retry budget for a transient transport failure on the LLM call. Same class of
+# bug as the Alpaca GET retry in alpaca_rest (2026-09-11): a single read timeout
+# used to abort the whole decision cycle — yolo_run 2026-09-11 17:20 lost its
+# entire 30-min cycle to "LLM error: The read operation timed out" (DeepSeek)
+# while the alpaca_rest path already retried. The second attempt uses a shorter
+# read budget so total call time stays inside the scheduler job timeout
+# (app.py: daily/weekly 180s, yolo/self_improve 300s).
+_RETRY_TIMEOUT = 60
+_RETRY_SLEEP = 2.0
+
 
 class AdvisorError(Exception):
     pass
+
+
+def _post(body: dict, timeout: int) -> dict:
+    """POST /chat/completions, retrying ONCE on a transient transport error.
+
+    Retryable: read timeout / connection reset / DNS blip, and HTTP 5xx.
+    NOT retryable: HTTP 4xx (auth or bad request — retrying cannot help).
+    """
+    req_data = json.dumps(body).encode()
+    last_err: Exception | None = None
+    attempts = (timeout, min(_RETRY_TIMEOUT, timeout))
+    for attempt, budget in enumerate(attempts):
+        req = urllib.request.Request(
+            config.LLM_BASE_URL + "/chat/completions",
+            data=req_data,
+            headers={
+                "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=budget) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                raise
+            last_err = e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_err = e
+        if attempt + 1 < len(attempts):
+            time.sleep(_RETRY_SLEEP)
+    raise last_err if last_err else AdvisorError("LLM request failed")
 
 
 def _extract_json(content: str):
@@ -59,17 +104,7 @@ def decide(context: dict, model: str | None = None) -> dict:
         "temperature": 0.2,
         "max_tokens": 2000,
     }
-    req = urllib.request.Request(
-        config.LLM_BASE_URL + "/chat/completions",
-        data=json.dumps(body).encode(),
-        headers={
-            "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        data = json.loads(resp.read().decode())
+    data = _post(body, timeout=90)
 
     content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     out = _extract_json(content)
@@ -107,17 +142,7 @@ def chat(system: str, user: str, model: str | None = None,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    req = urllib.request.Request(
-        config.LLM_BASE_URL + "/chat/completions",
-        data=json.dumps(body).encode(),
-        headers={
-            "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode())
+    data = _post(body, timeout=120)
 
     msg = (data.get("choices") or [{}])[0].get("message", {})
     return msg.get("content") or ""
