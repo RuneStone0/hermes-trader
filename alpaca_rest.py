@@ -7,6 +7,7 @@ synchronous and short-lived — ideal for cron invocations.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -51,19 +52,36 @@ class AlpacaClient:
                  timeout: int = 30, base: str | None = None):
         url = (base or self.base_url) + path
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("APCA-API-KEY-ID", self.key)
-        req.add_header("APCA-API-SECRET-KEY", self.secret)
-        req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode()
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:400]
-            raise AlpacaError(f"HTTP {e.code} {method} {path}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise AlpacaError(f"URLError {method} {path}: {e.reason}") from e
+        # A transient transport failure (read timeout, DNS blip, connection
+        # reset) used to escape as a bare TimeoutError and abort the WHOLE run —
+        # yolo_run 2026-09-11 17:05 crashed mid-cycle on a data-host read
+        # timeout during an Alpaca API degradation, losing that decision cycle
+        # (the `except AlpacaError: continue` symbol guard never saw it).
+        # Retry idempotent GETs once, then normalize any remaining transport
+        # error to AlpacaError so callers' existing handling applies. POST/DELETE
+        # are NOT retried (an order submit must never be duplicated).
+        attempts = 2 if method == "GET" else 1
+        last_err: "AlpacaError | None" = None
+        for attempt in range(attempts):
+            req = urllib.request.Request(url, data=data, method=method)
+            req.add_header("APCA-API-KEY-ID", self.key)
+            req.add_header("APCA-API-SECRET-KEY", self.secret)
+            req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read().decode()
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode(errors="replace")[:400]
+                raise AlpacaError(f"HTTP {e.code} {method} {path}: {detail}") from e
+            except urllib.error.URLError as e:
+                last_err = AlpacaError(f"URLError {method} {path}: {e.reason}")
+            except (TimeoutError, OSError) as e:
+                # socket read timeouts are not wrapped in URLError by urlopen
+                last_err = AlpacaError(f"{type(e).__name__} {method} {path}: {e}")
+            if attempt + 1 < attempts:
+                time.sleep(2.0)
+        raise last_err or AlpacaError(f"request failed {method} {path}")
 
     # -- account ------------------------------------------------------------ #
     def account(self) -> dict:
