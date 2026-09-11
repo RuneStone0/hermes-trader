@@ -63,9 +63,10 @@ def _opposite_side(side: str) -> str:
     return "sell" if side == "long" else "buy"
 
 
-def _log(account: str, decision: str, reason: str, detail: str | None = None) -> None:
+def _log(account: str, decision: str, reason: str, detail: str | None = None,
+         dedup: bool = False) -> None:
     print(f"[selfheal] {account}: {decision}: {reason}" + (f" | {detail}" if detail else ""))
-    db.log_event(account, "selfheal", decision, reason, detail=detail)
+    db.log_event(account, "selfheal", decision, reason, detail=detail, dedup=dedup)
 
 
 def _has_protection(open_orders: list[dict], side: str) -> bool:
@@ -82,7 +83,10 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
     try:
         clock = client.clock()
     except AlpacaError as e:
-        _log(account, "error", f"clock unavailable: {e}")
+        # Repeated broker-side clock failures are a no-op/waiting state, not a
+        # new event per tick: dedup keeps one row (daily/weekly/yolo_run do the
+        # same for clock errors) instead of 3 new error events every 10 min.
+        _log(account, "error", f"clock unavailable: {e}", dedup=True)
         return
     market_open = bool(clock.get("is_open"))
 
