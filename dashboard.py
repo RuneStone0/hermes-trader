@@ -876,7 +876,11 @@ def _overview_body() -> str:
     now = datetime.now(timezone.utc)
     for a in ACCOUNTS:
         s = _stats([t for t in closed if t["account"] == a])
-        le = db.last_event(a, _STRATEGY[a])
+        # Show the last MEANINGFUL decision — skip transient connectivity blips
+        # so a stale DNS/5xx hiccup never headlines a healthy bot's card.
+        evs = db.recent_events(30, account=a, strategy=_STRATEGY[a])
+        le = next((e for e in evs
+                   if not (e["decision"] == "error" and _is_transient(e["reason"]))), None)
         last_line = ""
         if le:
             last_line = (f"<div class='muted' style='font-size:11px;margin-top:6px'>"

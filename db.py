@@ -189,17 +189,21 @@ def log_event(account: str, strategy: str, decision: str, reason: str = "",
         conn.close()
 
 
-def recent_events(limit: int = 50, account: str | None = None) -> list[sqlite3.Row]:
+def recent_events(limit: int = 50, account: str | None = None,
+                  strategy: str | None = None) -> list[sqlite3.Row]:
     conn = connect()
     try:
+        q = "SELECT * FROM events WHERE 1=1"
+        p: list = []
         if account:
-            return conn.execute(
-                "SELECT * FROM events WHERE account=? ORDER BY id DESC LIMIT ?",
-                (account, int(limit)),
-            ).fetchall()
-        return conn.execute(
-            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (int(limit),)
-        ).fetchall()
+            q += " AND account=?"
+            p.append(account)
+        if strategy:
+            q += " AND strategy=?"
+            p.append(strategy)
+        q += " ORDER BY id DESC LIMIT ?"
+        p.append(int(limit))
+        return conn.execute(q, p).fetchall()
     finally:
         conn.close()
 
