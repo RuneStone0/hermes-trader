@@ -375,7 +375,7 @@ def _within_hours(s: str, hours: int) -> bool:
     return (datetime.now(timezone.utc) - dt).total_seconds() <= hours * 3600
 
 
-def _when_tag(s: str) -> str:
+def _when_tag(s: str, desc: str = "exact close time (UTC)") -> str:
     """Human-readable time (relative for recent, date for older) with a tooltip
     carrying the exact UTC timestamp."""
     dt = _as_dt(s)
@@ -396,7 +396,7 @@ def _when_tag(s: str) -> str:
         label = f"{dt.strftime('%b')} {dt.day}"
     exact = dt.astimezone(timezone.utc).strftime("%a %Y-%m-%d %H:%M UTC")
     return (f"<span class='hint' tabindex='0' role='button' "
-            f"data-name='{html.escape(exact)}' data-desc='exact close time (UTC)'>"
+            f"data-name='{html.escape(exact)}' data-desc='{html.escape(desc)}'>"
             f"{html.escape(label)}</span>")
 
 
@@ -902,8 +902,9 @@ def _overview_body() -> str:
     now = datetime.now(timezone.utc)
     for a in ACCOUNTS:
         s = _stats([t for t in closed if t["account"] == a])
-        # Show the last MEANINGFUL decision — skip transient connectivity blips
-        # so a stale DNS/5xx hiccup never headlines a healthy bot's card.
+        # Show the last MEANINGFUL decision — skip transient connectivity blips so
+        # a stale DNS/5xx hiccup never headlines a healthy bot. The age is shown
+        # too: hiding an old entry would mask a bot that has stopped trading.
         evs = db.recent_events(30, account=a, strategy=_STRATEGY[a])
         le = next((e for e in evs
                    if not (e["decision"] == "error" and _is_transient(e["reason"]))), None)
@@ -911,7 +912,10 @@ def _overview_body() -> str:
         if le:
             last_line = (f"<div class='muted' style='font-size:11px;margin-top:6px'>"
                          f"{_event_badge(le['decision'], le['reason'] or '')} "
-                         f"{html.escape((le['reason'] or '')[:90])}</div>")
+                         f"{html.escape((le['reason'] or '')[:90])} "
+                         f"<span style='opacity:.7'>· "
+                         f"{_when_tag(le['created_at'], 'when this happened (UTC)')}"
+                         f"</span></div>")
         next_line = (f"<div class='muted' style='font-size:11px;margin-top:4px'>"
                      f"next: {schedule.next_label(a, now)}</div>")
         eq_a = eq.get(a)

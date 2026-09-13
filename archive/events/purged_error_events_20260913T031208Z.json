@@ -1,0 +1,164 @@
+[
+  {
+    "id": 7,
+    "account": "weekly",
+    "strategy": "weekly_pullback",
+    "decision": "error",
+    "reason": "insufficient daily bars",
+    "detail": null,
+    "created_at": "2026-09-01T14:45:17.884866+00:00"
+  },
+  {
+    "id": 10,
+    "account": "weekly",
+    "strategy": "weekly_pullback",
+    "decision": "error",
+    "reason": "insufficient daily bars",
+    "detail": null,
+    "created_at": "2026-09-02T14:45:12.562913+00:00"
+  },
+  {
+    "id": 12,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "MSFT: order error: HTTP 422 POST /v2/orders: {\"base_price\":\"490.56\",\"code\":42210000,\"message\":\"stop_loss.stop_price must be \\u003c= base_price - 0.01\"}",
+    "detail": null,
+    "created_at": "2026-09-08T14:31:38.405187+00:00"
+  },
+  {
+    "id": 14,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "MSFT: order error: HTTP 422 POST /v2/orders: {\"base_price\":\"491.555\",\"code\":42210000,\"message\":\"stop_loss.stop_price must be \\u003c= base_price - 0.01\"}",
+    "detail": null,
+    "created_at": "2026-09-08T16:32:24.860670+00:00"
+  },
+  {
+    "id": 16,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "XLF: order error: HTTP 422 POST /v2/orders: {\"base_price\":\"57.555\",\"code\":42210000,\"message\":\"stop_loss.stop_price must be \\u003c= base_price - 0.01\"}",
+    "detail": null,
+    "created_at": "2026-09-08T16:32:25.813159+00:00"
+  },
+  {
+    "id": 20,
+    "account": "yolo",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "XLB: protection re-attach failed: HTTP 403 POST /v2/orders: {\"available\":\"0\",\"code\":40310000,\"existing_qty\":\"18\",\"held_for_orders\":\"18\",\"message\":\"insufficient qty available for order (requested: 18, available: 0)\",\"symbol\":\"XLB\"}",
+    "detail": null,
+    "created_at": "2026-09-08T20:07:24.714878+00:00"
+  },
+  {
+    "id": 28,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "XLP: close error: HTTP 403 DELETE /v2/positions/XLP: {\"available\":\"0\",\"code\":40310000,\"existing_qty\":\"12\",\"held_for_orders\":\"12\",\"message\":\"insufficient qty available for order (requested: 12, available: 0)\",\"symbol\":\"XLP\"}",
+    "detail": null,
+    "created_at": "2026-09-10T14:01:53.835360+00:00"
+  },
+  {
+    "id": 31,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "LLM error: HTTP Error 401: Unauthorized",
+    "detail": null,
+    "created_at": "2026-09-10T18:07:34.173454+00:00"
+  },
+  {
+    "id": 41,
+    "account": "daily",
+    "strategy": "daily_orb",
+    "decision": "error",
+    "reason": "clock error: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T17:00:02.563976+00:00"
+  },
+  {
+    "id": 42,
+    "account": "daily",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T16:20:17.673494+00:00"
+  },
+  {
+    "id": 43,
+    "account": "weekly",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T16:20:20.883267+00:00"
+  },
+  {
+    "id": 44,
+    "account": "yolo",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T16:20:24.097102+00:00"
+  },
+  {
+    "id": 45,
+    "account": "daily",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T17:02:10.488617+00:00"
+  },
+  {
+    "id": 46,
+    "account": "weekly",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T16:59:35.167861+00:00"
+  },
+  {
+    "id": 47,
+    "account": "yolo",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: HTTP 500 GET /v2/clock: {\"message\":\"Internal Server Error\"}\n",
+    "detail": null,
+    "created_at": "2026-09-11T16:59:38.779900+00:00"
+  },
+  {
+    "id": 50,
+    "account": "yolo",
+    "strategy": "yolo",
+    "decision": "error",
+    "reason": "LLM error: The read operation timed out",
+    "detail": null,
+    "created_at": "2026-09-11T17:20:35.930183+00:00"
+  },
+  {
+    "id": 55,
+    "account": "daily",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: URLError GET /v2/clock: [Errno -3] Temporary failure in name resolution",
+    "detail": null,
+    "created_at": "2026-09-11T21:10:33.134072+00:00"
+  },
+  {
+    "id": 56,
+    "account": "weekly",
+    "strategy": "selfheal",
+    "decision": "error",
+    "reason": "clock unavailable: URLError GET /v2/clock: [Errno -3] Temporary failure in name resolution",
+    "detail": null,
+    "created_at": "2026-09-11T21:10:53.258213+00:00"
+  }
+]
