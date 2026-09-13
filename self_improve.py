@@ -161,7 +161,7 @@ def main() -> None:
             for k, v in (vals.items() if isinstance(vals, dict) else [(sec, vals)]):
                 applied_details.append(f"{sec}.{k}={v}")
         db.log_event("improve", "self_improve", "apply",
-                     f"auto-applied {len(applied_details)} tuned knob(s)",
+                     f"Auto-tuned {len(applied_details)} setting(s)",
                      detail="; ".join(applied_details))
     for n in notes:
         db.log_event("improve", "self_improve", "warn",
@@ -188,7 +188,7 @@ def main() -> None:
             f.write("\n".join(block) + "\n")
 
     print(f"[improve] appended {len(lessons)} lessons; "
-          f"auto-applied {len(applied_details)} knob(s); "
+          f"Auto-tuned {len(applied_details)} setting(s); "
           f"{len(pending)} structural proposal(s) left for review")
 
 

@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import advisor
 import config
 import db
+import wording
 import fees
 import market
 from alpaca_rest import AlpacaClient, AlpacaError
@@ -192,7 +193,7 @@ def main() -> None:
         st.update(decided=True, decision="no_go", note=decision["rationale"])
         _save_state(d, st)
         print(f"[daily] NO-GO: {decision['rationale']}")
-        db.log_event(ACCOUNT, "daily_orb", "no_go", f"LLM: {decision['rationale']}")
+        db.log_event(ACCOUNT, "daily_orb", "no_go", f"AI: {decision['rationale']}")
         return
 
     shares = setup["shares"]
@@ -234,7 +235,8 @@ def main() -> None:
     _save_state(d, st)
     print(f"[daily] bracket order placed: {order.get('id')}")
     db.log_event(ACCOUNT, "daily_orb", "go",
-                 f"{decision['decision']} {setup['side']} {SYMBOL} x{shares}",
+                 wording.opened(SYMBOL, setup["side"], shares,
+                                decision.get("size_multiplier")),
                  detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
                          f"target={setup['target']:.2f} | {decision['rationale']}"))
 

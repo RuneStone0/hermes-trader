@@ -20,6 +20,7 @@ import config
 import db
 import fees
 import market
+import wording
 from alpaca_rest import AlpacaClient, AlpacaError
 from indicators import atr, sma
 
@@ -135,7 +136,7 @@ def main() -> None:
 
     if decision["decision"] not in ("go", "size_down"):
         print(f"[weekly] NO-GO: {decision['rationale']}")
-        db.log_event(ACCOUNT, "weekly_pullback", "no_go", f"LLM: {decision['rationale']}")
+        db.log_event(ACCOUNT, "weekly_pullback", "no_go", f"AI: {decision['rationale']}")
         return
 
     shares2 = shares
@@ -174,7 +175,8 @@ def main() -> None:
                  "entry": setup["entry"], "placed_at": datetime.now(ET).isoformat()})
     print(f"[weekly] bracket order placed: {order.get('id')}")
     db.log_event(ACCOUNT, "weekly_pullback", "go",
-                 f"{decision['decision']} {setup['side']} {SYMBOL} x{shares2}",
+                 wording.opened(SYMBOL, setup["side"], shares2,
+                                decision.get("size_multiplier")),
                  detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
                          f"target={setup['target']:.2f} | {decision['rationale']}"))
 

@@ -15,6 +15,7 @@ import json
 import advisor
 import config
 import db
+import wording
 from alpaca_rest import AlpacaClient, AlpacaError
 
 ACCOUNT = "yolo"
@@ -214,7 +215,7 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         }),
     )
     print(f"[yolo] placed order {order.get('id')}")
-    db.log_event(ACCOUNT, "yolo", "go", f"open {side} {sym} x{qty}",
+    db.log_event(ACCOUNT, "yolo", "go", wording.opened(sym, side, qty),
                  detail=(f"ref={ref:.2f} stop={stop:.2f} target={target:.2f}"
                          + (f" | {rationale[:200]}" if rationale else "")))
     return True
@@ -227,7 +228,7 @@ def _close_action(client, a, positions, dry_run,
         return False
     rationale = str(a.get("rationale") or plan_rationale or "").strip()
     print(f"[yolo] CLOSE {sym}" + (f" | {rationale[:120]}" if rationale else ""))
-    db.log_event(ACCOUNT, "yolo", "exit", f"close {sym}",
+    db.log_event(ACCOUNT, "yolo", "exit", wording.closed(sym),
                  detail=(rationale[:200] or None))
     if dry_run:
         return True
@@ -382,20 +383,20 @@ def main() -> None:
     try:
         content = advisor.chat(system, user, temperature=0.3, max_tokens=4000)
     except Exception as e:
-        print(f"[yolo] LLM error: {e}")
-        db.log_event(ACCOUNT, "yolo", "error", f"LLM error: {e}")
+        print(f"[yolo] AI error: {e}")
+        db.log_event(ACCOUNT, "yolo", "error", f"AI error: {e}")
         return
 
     plan = advisor._extract_json(content)
     if not isinstance(plan, dict):
-        print("[yolo] unparseable plan (stand down)")
-        db.log_event(ACCOUNT, "yolo", "error", "unparseable LLM plan")
+        print("[yolo] AI plan could not be read (stand down)")
+        db.log_event(ACCOUNT, "yolo", "error", "AI plan could not be read")
         return
     actions = plan.get("actions") or []
     rationale = str(plan.get("rationale", ""))[:200]
     if not actions:
         print("[yolo] no actions proposed (stand down)")
-        db.log_event(ACCOUNT, "yolo", "skip", "LLM proposed no actions", dedup=True)
+        db.log_event(ACCOUNT, "yolo", "skip", "AI proposed no changes", dedup=True)
         return
 
     executed = 0
@@ -429,7 +430,7 @@ def main() -> None:
         h_rat = next((str(h.get("rationale") or "").strip()
                       for h in holds if h.get("rationale")), rationale)
         if h_rat:
-            db.log_event(ACCOUNT, "yolo", "skip", f"hold: {h_rat[:180]}", dedup=True)
+            db.log_event(ACCOUNT, "yolo", "skip", f"Holding: {h_rat[:180]}", dedup=True)
 
     print(f"[yolo] executed {executed}/{len(actions)} actions | {rationale or '—'}")
 
