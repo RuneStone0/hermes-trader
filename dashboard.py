@@ -385,11 +385,33 @@ def _when_tag(s: str) -> str:
             f"{html.escape(label)}</span>")
 
 
-def _event_badge(decision: str) -> str:
-    color = _DECISION_COLORS.get(decision, "#8b949e")
+# Transient connectivity / upstream failures (DNS blips, Alpaca 5xx, LLM read
+# timeouts). These are logged for the record but are NOT the bot's fault and
+# self-heal on retry — rendered distinctly so they don't read as hard errors.
+_TRANSIENT_PATTERNS = (
+    "clock unavailable", "urlerror", "name resolution", "timed out", "timeout",
+    "connection reset", "connection aborted", "temporarily", "http 500",
+    "http 502", "http 503", "http 504", "internal server error",
+)
+
+
+def _is_transient(reason: str) -> bool:
+    r = (reason or "").lower()
+    return any(p in r for p in _TRANSIENT_PATTERNS)
+
+
+def _event_badge(decision: str, reason: str = "") -> str:
+    d = str(decision)
+    label = d.upper()
+    color = _DECISION_COLORS.get(d, "#8b949e")
+    tip = ""
+    if d == "error" and _is_transient(reason):
+        color = _DECISION_COLORS["warn"]  # amber, not red
+        label = "TRANSIENT"
+        tip = " title='transient connectivity/upstream failure — retried automatically, not a bot fault'"
     return (f"<span style='display:inline-block;padding:1px 8px;border-radius:999px;"
-            f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'>"
-            f"{html.escape(str(decision)).upper()}</span>")
+            f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'{tip}>"
+            f"{html.escape(label)}</span>")
 
 
 def _events_rows(events) -> str:
@@ -404,7 +426,7 @@ def _events_rows(events) -> str:
             reason = f"{reason} <span class='muted'>· {detail}</span>"
         out.append(
             f"<tr><td class='muted'>{_fmt_ts(e['created_at'])}</td>"
-            f"<td>{_event_badge(e['decision'])}</td>"
+            f"<td>{_event_badge(e['decision'], e['reason'] or '')}</td>"
             f"<td>{reason}</td></tr>"
         )
     return "".join(out)
@@ -858,7 +880,7 @@ def _overview_body() -> str:
         last_line = ""
         if le:
             last_line = (f"<div class='muted' style='font-size:11px;margin-top:6px'>"
-                         f"{_event_badge(le['decision'])} "
+                         f"{_event_badge(le['decision'], le['reason'] or '')} "
                          f"{html.escape((le['reason'] or '')[:90])}</div>")
         next_line = (f"<div class='muted' style='font-size:11px;margin-top:4px'>"
                      f"next: {schedule.next_label(a, now)}</div>")
