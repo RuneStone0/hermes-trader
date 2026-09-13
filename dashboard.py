@@ -35,6 +35,21 @@ _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
                     "fix": "#2ea043", "warn": "#d29922"}
 
+# Plain-English label + explanation for each journal badge. The dashboard is read
+# by a non-expert: no GO / NO_GO / EXIT shorthand, and every badge carries a
+# hover/tap tooltip (class 'hint') saying what the bot actually did.
+_DECISION_LABELS = {
+    "go":        ("Traded",    "The bot placed an order to open a position."),
+    "size_down": ("Traded",    "The bot opened a position — smaller than its usual size."),
+    "exit":      ("Closed",    "The bot closed the position: its stop, its target, or its own call."),
+    "no_go":     ("Passed",    "A setup appeared, but the bot decided not to trade it."),
+    "skip":      ("No action", "Nothing to do this run: no setup, market closed, or it held an existing position."),
+    "error":     ("Error",     "Something went wrong — worth a look."),
+    "warn":      ("Warning",   "Something looked off, but the bot carried on."),
+    "fix":       ("Fixed",     "The self-healing routine corrected a problem automatically."),
+    "apply":     ("Tuned",     "The self-improvement routine adjusted a setting inside the safety limits."),
+}
+
 # Symbol -> (full name, one-line description) for the hover / tap tooltip.
 # Covers the watchlist + common traded instruments; anything else falls back to
 # "Traded instrument". Kept server-side so the HTML stays self-contained (no CDN,
@@ -401,16 +416,21 @@ def _is_transient(reason: str) -> bool:
 
 
 def _event_badge(decision: str, reason: str = "") -> str:
+    """A plain-English pill for a journal decision, with a hover/tap tooltip."""
     d = str(decision)
-    label = d.upper()
     color = _DECISION_COLORS.get(d, "#8b949e")
-    tip = ""
+    label, desc = _DECISION_LABELS.get(
+        d, (d.replace("_", " ").strip().title() or "Event", "Bot activity."))
+    name = label
     if d == "error" and _is_transient(reason):
         color = _DECISION_COLORS["warn"]  # amber, not red
-        label = "TRANSIENT"
-        tip = " title='transient connectivity/upstream failure — retried automatically, not a bot fault'"
-    return (f"<span style='display:inline-block;padding:1px 8px;border-radius:999px;"
-            f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'{tip}>"
+        label, name = "Temporary", "Temporary glitch"
+        desc = ("A brief network or data hiccup — not a bot fault. It retried and "
+                "carried on; nothing was lost.")
+    return (f"<span class='hint' tabindex='0' role='button' "
+            f"data-name='{html.escape(name)}' data-desc='{html.escape(desc)}' "
+            f"style='display:inline-block;padding:1px 8px;border-radius:999px;"
+            f"font-size:11px;font-weight:600;color:{color};border:1px solid {color}'>"
             f"{html.escape(label)}</span>")
 
 
@@ -507,7 +527,7 @@ def _close_reason(r):
     if raw == "target":
         return ("Target hit", f"take-profit filled at {_money(exit_px)}")
     if raw == "market":
-        return (("Closed by the LLM" if rat else "Closed at market"),
+        return (("Closed by the AI" if rat else "Closed at market"),
                 str(rat) if rat else f"market exit at {_money(exit_px)}")
     if raw == "other":
         return ("Closed", f"exit at {_money(exit_px)}")
@@ -525,7 +545,7 @@ def _close_reason(r):
     if near(exit_px, r["target_price"]):
         return ("Target hit", f"exit {_money(exit_px)} ≈ target {_money(r['target_price'])}")
     if rat:
-        return ("Closed by the LLM", str(rat))
+        return ("Closed by the AI", str(rat))
     return ("Closed", "position exited (no stop/target match)")
 
 
@@ -551,9 +571,15 @@ def _detail_row_html(r, eq: float | None, colspan: int) -> str:
     side = r["side"]
 
     # --- head: what happened, at a glance ---
+    side_label = {"long": "Bought", "short": "Sold short"}.get(side, str(side))
+    side_desc = ("Betting the price will rise." if side == "long"
+                 else "Betting the price will fall." if side == "short"
+                 else "Position direction.")
     head = (f"<span class='sym'>{symbol}</span>"
             f"<span class='qty muted'>x{r['qty']:g}</span>"
-            f"<span class='dd-badge {side}'>{html.escape(side)}</span>")
+            f"<span class='dd-badge {side} hint' tabindex='0' role='button' "
+            f"data-name='{html.escape(side_label)}' data-desc='{html.escape(side_desc)}'>"
+            f"{html.escape(side_label)}</span>")
     if (dj or {}).get("decision"):
         head += _event_badge((dj or {}).get("decision"))
     size_mult = (dj or {}).get("size_multiplier")

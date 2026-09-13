@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 # App version (bumped manually on releases; shown in the dashboard footer).
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
