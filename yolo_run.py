@@ -233,10 +233,13 @@ def _close_action(client, a, positions, dry_run,
     if dry_run:
         return True
     try:
-        n = client.cancel_open_orders_for_symbol(sym)
-        if n:
-            print(f"[yolo] released {n} open order(s) for {sym} before close")
-        client.close_position(sym)
+        # Cancel the bracket legs FIRST and wait for the release to settle: an
+        # async Alpaca cancel keeps holding the qty, so an immediate close 403s
+        # ("insufficient qty available") and the position then exits on its stop
+        # instead (XLP 2026-09-14). release_and_close retries that 403.
+        _, released = client.release_and_close(sym)
+        if released:
+            print(f"[yolo] released {released} open order(s) for {sym} before close")
     except AlpacaError as e:
         print(f"[yolo] close error {sym}: {e}")
         db.log_event(ACCOUNT, "yolo", "error", f"{sym}: close error: {e}")

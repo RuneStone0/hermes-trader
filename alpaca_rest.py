@@ -110,24 +110,66 @@ class AlpacaClient:
     def cancel_order(self, order_id: str) -> dict:
         return self._request("DELETE", f"/v2/orders/{order_id}")
 
+    def live_orders_for(self, symbol: str) -> list:
+        """Still-live orders for `symbol`, INCLUDING 'held' bracket legs.
+
+        A bracket's stop/target legs read 'held' and hold the position's whole
+        qty, so ?status=open silently omits them — always scan ALL statuses.
+        """
+        return [o for o in self.orders_all(limit=200)
+                if o.get("symbol") == symbol and o.get("status") in OPEN_ORDER_STATUSES]
+
     def cancel_open_orders_for_symbol(self, symbol: str) -> int:
         """Cancel every still-live order for `symbol` and return the count.
 
         A position's bracket legs (stop + target) hold its full qty, so a
         DELETE /v2/positions/{symbol} close 403s with 'insufficient qty
-        available' until they are released. Call this first, then close.
-        Best-effort: a cancel failure is skipped — if the close still 403s the
-        caller's error path surfaces it.
+        available' until they are released. Best-effort: a cancel failure is
+        skipped — if the close still 403s the caller's error path surfaces it.
         """
         cancelled = 0
-        for o in self.orders_all(limit=200):
-            if o.get("symbol") == symbol and o.get("status") in OPEN_ORDER_STATUSES:
-                try:
-                    self.cancel_order(o["id"])
-                except AlpacaError:
-                    continue
-                cancelled += 1
+        for o in self.live_orders_for(symbol):
+            try:
+                self.cancel_order(o["id"])
+            except AlpacaError:
+                continue
+            cancelled += 1
         return cancelled
+
+    def release_and_close(self, symbol: str, attempts: int = 3,
+                          settle_s: float = 2.0,
+                          wait_s: float = 8.0) -> tuple[dict, int]:
+        """Close a position that carries a bracket: release its legs, WAIT for
+        the release to land, then close — retrying the close on a 403 hold.
+
+        Alpaca's cancel is ASYNCHRONOUS: the leg goes to pending_cancel and
+        keeps holding the qty until the cancel is processed, so cancel-then-
+        close in the same breath loses the race (403 code 40310000
+        'insufficient qty available'; XLP 2026-09-14 — the market close 403'd
+        and the position then exited on its stop instead). Poll until no live
+        order remains for the symbol, and retry the close on 40310000 so a leg
+        that Alpaca only surfaces a moment later is still released.
+        Returns (close order, legs cancelled).
+        """
+        released = 0
+        last: "AlpacaError | None" = None
+        for i in range(max(1, attempts)):
+            released += self.cancel_open_orders_for_symbol(symbol)
+            deadline = time.monotonic() + wait_s
+            while time.monotonic() < deadline and self.live_orders_for(symbol):
+                time.sleep(settle_s)
+            try:
+                return self.close_position(symbol), released
+            except AlpacaError as e:
+                msg = str(e)
+                if "40410000" in msg or "position does not exist" in msg.lower():
+                    return {}, released  # already flat — nothing to close
+                if "40310000" not in msg:
+                    raise
+                last = e
+                if i + 1 < attempts:
+                    time.sleep(settle_s)
+        raise last or AlpacaError(f"could not close {symbol}")
 
     def submit_order(self, order: dict) -> dict:
         return self._request("POST", "/v2/orders", body=order)
