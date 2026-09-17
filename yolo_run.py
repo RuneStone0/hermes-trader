@@ -15,6 +15,7 @@ import json
 import advisor
 import config
 import db
+import guards
 import wording
 from alpaca_rest import AlpacaClient, AlpacaError
 
@@ -64,6 +65,31 @@ def _ref_price(client: AlpacaClient, sym: str) -> float | None:
     return float(bars[-1]["c"]) if bars else None
 
 
+def _earnings_block(client, sym: str) -> str | None:
+    """Reason to refuse a NEW entry because the name reports earnings within the
+    hold window, or None.
+
+    A stop-loss does NOT protect an earnings gap: the tape opens through the
+    level and the fill lands wherever the market is (SLV already gapped through
+    its own stop for -1.74R instead of -1.0R). The bots now hold overnight by
+    default, so a single-name position taken the day before a print is the one
+    genuinely unhedged tail risk in the design. ETFs never report, so this only
+    ever fires for single names.
+    """
+    days = int(config.YOLO.get("block_earnings_within_days", 0) or 0)
+    if days <= 0:
+        return None
+    try:
+        import market_ctx
+        hit = (market_ctx.earnings_within(client, [sym], days=days) or {}).get(sym)
+    except Exception:
+        return None                      # no data -> fail open, never block blindly
+    if hit:
+        return (f"{sym} reports earnings {hit.get('date')} "
+                f"(in {hit.get('in_days')}d) — a gap would jump the stop")
+    return None
+
+
 def _open_action(client, a, equity, buying_power, positions, dry_run,
                  plan_rationale: str = "", snapshot: dict | None = None) -> bool:
     sym = str(a.get("symbol", "")).strip().upper()
@@ -93,6 +119,26 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         db.log_event(ACCOUNT, "yolo", "no_go", f"{sym}: max concurrent positions")
         return False
 
+    # Deterministic risk gates. Enforced HERE (at execution, not only before the
+    # LLM call) so the gate cannot be bypassed: closes stay allowed because they
+    # reduce risk, opens do not.
+    allowed, gate_reason = guards.entry_gate(ACCOUNT)
+    if not allowed:
+        print(f"[yolo] blocked {sym}: {gate_reason}")
+        db.log_event(ACCOUNT, "yolo", "blocked", f"{sym}: {gate_reason}")
+        return False
+    fomc, fomc_why = guards.fomc_block_new_overnight()
+    if fomc:
+        print(f"[yolo] blocked {sym}: {fomc_why}")
+        db.log_event(ACCOUNT, "yolo", "blocked",
+                     f"{sym}: {fomc_why} — a rate decision can gap through the stop")
+        return False
+    earn = _earnings_block(client, sym)
+    if earn:
+        print(f"[yolo] blocked {sym}: {earn}")
+        db.log_event(ACCOUNT, "yolo", "blocked", f"{sym}: {earn}")
+        return False
+
     side = str(a.get("side", "")).lower()
     if side not in ("buy", "sell"):
         print(f"[yolo] reject {sym}: bad side {side!r}")
@@ -108,6 +154,11 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
 
     size_pct = _clamp(float(a.get("size_pct", 0.05) or 0.05), 0.0,
                       config.YOLO["max_position_pct"])
+    # Drawdown-band / event-day sizing, applied to the notional request.
+    size_mult, size_reasons = guards.size_factor(ACCOUNT)
+    if size_mult < 1.0:
+        size_pct *= size_mult
+        guards.note_size_adjust(ACCOUNT, "yolo", size_mult, size_reasons)
     notional = equity * size_pct
     qty = max(1, int(notional / ref))
 
@@ -181,9 +232,15 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         "concurrent_positions": len(positions),
         "max_position_pct": config.YOLO["max_position_pct"],
         "max_risk_pct": config.YOLO["max_risk_pct"],
+        "size_multiplier_applied": round(size_mult, 3),
+        "size_reasons": size_reasons,
         "risk": {"entry_ref": round(ref, 4), "risk_dist": round(risk_dist, 4),
                  "reward_dist": round(reward_dist, 4), "rr": rr},
     }
+    try:
+        ctx["risk_governor"] = guards.entry_gate(ACCOUNT)[1] or "clear"
+    except Exception:
+        pass
     if snapshot:
         ctx["symbol_snapshot"] = snapshot
         # Dashboard "Setup" row: the exact data the LLM saw when it decided.
@@ -215,7 +272,7 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         }),
     )
     print(f"[yolo] placed order {order.get('id')}")
-    db.log_event(ACCOUNT, "yolo", "go", wording.opened(sym, side, qty),
+    db.log_event(ACCOUNT, "yolo", "go", wording.opened(sym, side, qty, size_mult),
                  detail=(f"ref={ref:.2f} stop={stop:.2f} target={target:.2f}"
                          + (f" | {rationale[:200]}" if rationale else "")))
     return True
@@ -297,7 +354,23 @@ def main() -> None:
 
     positions = {p["symbol"]: p for p in client.positions()}
 
+    # Flat AND gated => nothing to manage and nothing we are allowed to open, so
+    # skip the entire cycle INCLUDING the LLM call (tokens are a real cost and a
+    # guaranteed-refused prompt is wasted spend). Only reached when the book is
+    # empty, so this can never block a close.
+    if not positions:
+        allowed, gate_reason = guards.entry_gate(ACCOUNT)
+        if not allowed:
+            print(f"[yolo] stand down: {gate_reason}")
+            db.log_event(ACCOUNT, "yolo", "blocked",
+                         f"Standing down: {gate_reason}", dedup=True)
+            return
+
     watch: dict = {}
+    try:
+        import market_ctx
+    except Exception:                       # module absent/broken -> legacy snapshot only
+        market_ctx = None
     for sym in config.YOLO["watchlist"]:
         try:
             bars = client.bars(sym, timeframe="1Day", limit=30, start=None).get("bars", [])
@@ -310,7 +383,7 @@ def main() -> None:
         # see overnight gaps itself (live 490.56 vs last_close 510.12) instead
         # of sizing stops off a stale level.
         lt = client.latest_trade(sym)
-        watch[sym] = {
+        snap = {
             "last": round(lt["price"], 2) if lt else round(closes[-1], 2),
             "last_close": round(closes[-1], 2),
             "chg_5d_pct": round((closes[-1] / closes[-6] - 1) * 100, 2) if len(closes) >= 6 else None,
@@ -318,6 +391,20 @@ def main() -> None:
             "high_30d": round(max(float(b["h"]) for b in bars), 2),
             "low_30d": round(min(float(b["l"]) for b in bars), 2),
         }
+        # Enrich with volatility / structure / intraday context. The autonomous
+        # bot used to decide from THIRTY DAILY CLOSES per symbol — no ATR, no
+        # volume, no moving averages, no intraday structure — and then invented
+        # its stops ("-1.5%") because it had no volatility unit to reason with.
+        # These keys are additive: the legacy ones above stay, because the
+        # dashboard's journal reads them back out.
+        if market_ctx is not None:
+            try:
+                extra = market_ctx.symbol_snapshot(client, sym) or {}
+                snap.update({k: v for k, v in extra.items() if k not in snap})
+                snap["text"] = extra.get("text")
+            except Exception:
+                pass
+        watch[sym] = snap
 
     open_map = {t["symbol"]: t for t in db.open_trades(ACCOUNT)}
     pos_ctx = [
@@ -362,13 +449,46 @@ def main() -> None:
         "mistakes, reinforce what has worked. You may open, close, or hold. EVERY "
         "action must carry its OWN concise rationale (1-2 sentences: the thesis, "
         "why now, what would invalidate it) — the decision journal and your "
-        "future self learn from it, so no bare orders. Respond with ONLY a JSON "
-        "object (no markdown):\n"
+        "future self learn from it, so no bare orders.\n"
+        "HOW TO USE THE CONTEXT YOU ARE GIVEN:\n"
+        " * market_regime tells you whether this is a trend tape or a chop tape. "
+        "Trend-following/breakout entries work in a trend tape and get chopped to "
+        "pieces in a chop tape; in chop, prefer buying weakness in something "
+        "structurally strong (or shorting strength in something weak) over "
+        "chasing a move that has already gone. Read it before choosing a side.\n"
+        " * Each symbol's snapshot carries atr_pct (its volatility), rsi14, "
+        "distance from its 20/50/200-day averages, volume versus its average, "
+        "position within its recent range, and intraday structure. SIZE YOUR "
+        "STOP FROM atr_pct, not from a round number: a stop closer than about "
+        "1x ATR is inside the noise and will be hit by ordinary fluctuation.\n"
+        " * economic_calendar / high_impact_today list upcoming macro releases in "
+        "UTC. Around a high-impact print the tape moves on the number, not on "
+        "your setup — the guards already block NEW entries in the immediate "
+        "window, so plan around those times rather than fighting them.\n"
+        " * news carries the last day's symbol-tagged headlines; use it as colour "
+        "on WHY a move is happening, never as a substitute for the price data.\n"
+        " * earnings lists any watchlist name reporting soon. A STOP DOES NOT "
+        "PROTECT AN EARNINGS GAP — the tape opens through the level and the fill "
+        "lands wherever it lands. New single names with a report inside the "
+        "window will be refused, so prefer instruments without one (ETFs).\n"
+        " * benchmark and performance_note tell you what staying in cash has cost "
+        "you versus simply holding SPY. Flat is a position, and it is measured. "
+        "Do NOT treat a losing streak as proof that your strategy cannot work — "
+        "at 2:1 reward:risk a profitable system still loses seven in a row about "
+        "6% of the time — but DO change WHAT you trade when the regime says your "
+        "current approach is mismatched.\n"
+        "Respond with ONLY a JSON object (no markdown):\n"
         '{"actions":[{"action":"open|close|hold","symbol":"SPY","side":"buy|sell",'
         '"size_pct":0.05,"stop":"-1.5%","target":"+3%","rationale":"<1-2 sentences>"}],'
         '"rationale":"<one sentence plan summary>"}'
     )
-    user = json.dumps({
+    # Shared context (regime, calendar, news, drawdown governor, benchmark,
+    # streak framing) — the same block the daily and weekly bots merge, so all
+    # three decide from the same picture. with_symbols=False: the per-symbol
+    # snapshots are already in `watch` above.
+    shared = guards.context(ACCOUNT, client, symbols=list(watch.keys()),
+                            with_symbols=False)
+    payload = {
         "equity": round(equity, 2),
         "buying_power": round(buying_power, 2),
         "positions": pos_ctx,
@@ -381,7 +501,9 @@ def main() -> None:
             "max_risk_pct": config.YOLO["max_risk_pct"],
             "max_concurrent_positions": config.YOLO["max_concurrent_positions"],
         },
-    }, indent=2)
+    }
+    payload.update(shared)
+    user = json.dumps(payload, indent=2)
 
     try:
         content = advisor.chat(system, user, temperature=0.3, max_tokens=4000)

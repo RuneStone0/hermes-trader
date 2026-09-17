@@ -39,6 +39,15 @@ JOBS = [
      "market_gate": True, "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],
      "cmd": [sys.executable, "self_improve.py"], "timeout": 300},
+    # Warm the economic-calendar cache BEFORE the session so the first decision
+    # of the day never pays a network round-trip (and so a feed outage shows up
+    # in the logs while the market is still closed). Twice a day keeps the 7-day
+    # forward window continuous even if a refresh fails.
+    {"name": "econ", "type": "times", "times": ["12:45", "20:45"],
+     "cmd": [sys.executable, "-c",
+             "import econ; r=econ.refresh(force=True); "
+             "print(r['source'], len(r['events']), 'events'); print(econ.brief()[:400])"],
+     "timeout": 120},
 ]
 
 

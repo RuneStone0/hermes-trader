@@ -20,6 +20,7 @@ import config
 import db
 import fees
 import market
+import guards
 import wording
 from alpaca_rest import AlpacaClient, AlpacaError
 from indicators import atr, sma
@@ -108,6 +109,20 @@ def main() -> None:
     risk_dollars = equity * config.RISK_PCT_PER_TRADE
     shares = max(1, int(risk_dollars / atr14))
 
+    # Deterministic gates before the LLM call: drawdown governor, calendar
+    # blackout, and an FOMC day (a rate decision gaps straight through a stop).
+    allowed, gate_reason = guards.entry_gate(ACCOUNT)
+    if not allowed:
+        print(f"[weekly] blocked: {gate_reason}")
+        db.log_event(ACCOUNT, "weekly_pullback", "blocked", f"Standing down: {gate_reason}")
+        return
+    fomc, fomc_why = guards.fomc_block_new_overnight()
+    if fomc:
+        db.log_event(ACCOUNT, "weekly_pullback", "blocked",
+                     f"Standing down: {fomc_why} — a rate decision can gap "
+                     f"straight through the stop")
+        return
+
     rr = fees.fee_adjusted_rr(setup["entry"], setup["target"], setup["stop"],
                               setup["side"], shares)
     if not rr["clears"]:
@@ -123,10 +138,9 @@ def main() -> None:
         "net_rr_after_fees": rr["net_rr"],
         "technical": (f"{setup['trend']}: price {last:.2f} vs 100d-SMA {sma100:.2f}, "
                       f"pulled back to within 1x ATR ({atr14:.2f})."),
-        "market_regime": setup["trend"],
         "recent_performance": "see trades.db",
-        "news": "no news feed (requires Alpaca data subscription)",
     }
+    ctx.update(guards.context(ACCOUNT, client, symbols=[SYMBOL]))
     try:
         decision = advisor.decide(ctx)
     except Exception as e:
@@ -142,6 +156,12 @@ def main() -> None:
     shares2 = shares
     if decision["decision"] == "size_down":
         shares2 = max(1, int(shares * decision["size_multiplier"]))
+
+    # Risk-governor / event-day sizing (multiplicative with the LLM's cut).
+    size_mult, size_reasons = guards.size_factor(ACCOUNT)
+    if size_mult < 1.0:
+        shares2 = max(1, int(shares2 * size_mult))
+        guards.note_size_adjust(ACCOUNT, "weekly_pullback", size_mult, size_reasons)
 
     print(f"[weekly] {decision['decision'].upper()} {setup['side']} {SYMBOL} x{shares2} "
           f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} target={setup['target']:.2f} "
@@ -176,7 +196,7 @@ def main() -> None:
     print(f"[weekly] bracket order placed: {order.get('id')}")
     db.log_event(ACCOUNT, "weekly_pullback", "go",
                  wording.opened(SYMBOL, setup["side"], shares2,
-                                decision.get("size_multiplier")),
+                                float(decision.get("size_multiplier") or 1.0) * size_mult),
                  detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
                          f"target={setup['target']:.2f} | {decision['rationale']}"))
 

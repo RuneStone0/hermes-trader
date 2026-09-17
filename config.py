@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 # App version (bumped manually on releases; shown in the dashboard footer).
-VERSION = "1.4.6"
+VERSION = "1.5.0"
 
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
@@ -150,12 +150,20 @@ DAILY = {
     # NO max_trades_per_day: the LLM + risk gate decide timing, not a cap.
     "time_in_force": "gtc",   # bracket legs survive 20:00 ET -> overnight protected
     "max_trades_per_day": 3,  # loose ceiling so a bug can't re-enter every tick
+    # How far PAST the range edge price may be before the breakout counts as
+    # stale and is passed on. The plan's risk is one range wide (edge to edge),
+    # but the entry is a market order that fills at the current price while the
+    # stop stays pinned to the opposite edge — so entering a 10:05 breakout at
+    # 15:30 would risk several multiples of the intended size. 0.25% keeps the
+    # realised risk within a few percent of the plan.
+    "max_chase_pct": 0.25,
 }
 DAILY_TUNE = {
     "rr_multiple": (0.5, 3.0),
     "orb_start": None, "orb_end": None,   # times: validated as HH:MM, not ranged
     "close_confirmation": (None, None),   # boolean, validated as bool
     "max_trades_per_day": (1, 5),
+    "max_chase_pct": (0.05, 2.0),
 }
 
 # --------------------------------------------------------------------------- #
@@ -185,9 +193,17 @@ WEEKLY_TUNE = {
 # Set False for a truly unconstrained bot (NOT recommended, even on paper).
 YOLO = {
     "safety_floor": True,
-    "max_position_pct": 0.6,        # max notional in one position (% of equity) — relaxed
-    "max_risk_pct": 0.05,           # max entry->stop risk per trade (% of equity) — relaxed
-    "max_concurrent_positions": 10, # relaxed
+    # Sizing DEFAULTS (restored 2026-09-17). The nightly auto-tuner had walked
+    # these down to 0.05 / 0.01 / 1 on the evidence of five-to-seven trades —
+    # see risk_gov.py for the full post-mortem. Flinch-based de-risking is now
+    # replaced by the drawdown governor (RISK_GOV), which is state-based and
+    # re-risks automatically when the account recovers. These values are a
+    # starting point: big enough that a correct call is visible in the account
+    # (a 25% notional / 2% risk trade on $10k moves ~$120-200), small enough
+    # that a twenty-trade losing streak is survivable.
+    "max_position_pct": 0.25,       # max notional in one position (% of equity)
+    "max_risk_pct": 0.02,           # max entry->stop risk per trade (% of equity)
+    "max_concurrent_positions": 4,  # still a bounded book, not a scattergun
     "require_stop_loss": True,      # IRREDUCIBLE (re-pinned below)
     "allowed_assets": ALLOWED_ASSETS,  # retail-accessible only (IRREDUCIBLE)
     "crypto_allowlist": CRYPTO_ALLOWLIST,  # crypto: BTC only (IRREDUCIBLE)
@@ -197,6 +213,10 @@ YOLO = {
     # safety — never tune via overrides.
     "min_stop_dist_pct": 0.002,
     "min_target_dist_pct": 0.001,
+    # Refuse a NEW single-name entry when the name reports earnings within this
+    # many days: a GTC stop does not protect an earnings gap, and the bot holds
+    # overnight by default. ETF positions (no earnings) are unaffected. 0 disables.
+    "block_earnings_within_days": 1,
     # v1 auto-trade universe (liquid, retail-accessible US equities/ETFs).
     # Options and BTC/USD are excluded from v1 auto-execution because they need
     # the options-chain / crypto market-data endpoints, which are follow-ups.
@@ -211,6 +231,76 @@ YOLO_TUNE = {
     "max_risk_pct": (0.01, 0.1),
     "max_concurrent_positions": (1, 10),
 }
+
+# --------------------------------------------------------------------------- #
+# Risk governor (DETERMINISTIC — reducing-only, and deliberately NOT tunable)
+# --------------------------------------------------------------------------- #
+# Replaces flinch-based de-risking: instead of shrinking size every time the
+# bot loses (which reacted to a 5-7 trade losing streak — noise for any 2:1
+# system), this de-risks on DRAWdown below the account's high-water mark and
+# automatically re-risks as equity recovers. See risk_gov.py.
+#
+# `dd_bands` = ordered (max_drawdown_pct, size_multiplier); the first band the
+# current drawdown fits inside wins, so the last entry is the deep floor.
+# `hard_stop_dd_pct` blocks all NEW entries beyond that drawdown.
+# `daily_loss_cap_pct` blocks new entries for the rest of the session once the
+# day's P/L (realized + unrealized, from equity vs last_equity) is this negative.
+# `max_gross_exposure_pct` is an account-wide notional ceiling across positions.
+#
+# THESE ARE RISK CONTROLS, NOT STRATEGY. The auto-tuner can only ever propose
+# them (PENDING REVIEW) — an autonomous loop able to loosen its own brakes is
+# not self-improvement.
+RISK_GOV = {
+    "enabled": True,
+    "dd_bands": [(3.0, 1.0), (6.0, 0.6), (10.0, 0.35), (15.0, 0.20)],
+    "hard_stop_dd_pct": 15.0,
+    "daily_loss_cap_pct": 1.5,
+    "max_gross_exposure_pct": 150.0,
+}
+
+# --------------------------------------------------------------------------- #
+# Event awareness (economic calendar) — econ.py
+# --------------------------------------------------------------------------- #
+# The bots used to decide with zero knowledge of the macro calendar: CPI printed
+# Mon 2026-09-14 12:30 UTC and the FOMC decision Wed 2026-09-16 18:00 UTC while
+# entries were being placed straight through both, blind. This block makes the
+# calendar a first-class INPUT and a deterministic GUARD.
+#
+#   blackout_min      — no NEW entries within +/- this many minutes of a
+#                       qualifying release (the tape around CPI/FOMC is noise,
+#                       and a bracket placed into it gets whipsawed).
+#   blackout_importance — 1 = only high-impact events (CPI, FOMC, NFP, PCE...).
+#   event_day_size_cut  — size multiplier applied on a day carrying a qualifying
+#                       event, so exposure is halved rather than zeroed.
+#   block_overnight_into_fomc — never carry NEW risk through a same-day FOMC
+#                       decision unless the position is already profitable.
+# Everything here FAILS OPEN: if the calendar cannot be fetched, trading
+# proceeds exactly as it did before (econ.py returns empty, not an error).
+EVENT_GUARD = {
+    "enabled": True,
+    "countries": ("US",),
+    "blackout_min": 30,
+    "blackout_importance": 1,
+    # Which events make a day an "event day" for the SIZE CUT. Calibrated to 1
+    # (high only: CPI, FOMC, NFP, PCE, GDP, retail sales) on purpose. At 0 the
+    # cut fired almost daily — a Fed speech or a mid-tier survey counts as
+    # medium on the TradingView scale — which would have amounted to a permanent
+    # 50% size reduction. That is the same flinch this whole release removed,
+    # just dressed up as event awareness. Medium events are still listed in the
+    # LLM's calendar digest for information.
+    "event_day_importance": 1,
+    "event_day_size_cut": 0.5,
+    "block_overnight_into_fomc": True,
+}
+
+# --- self-improvement sample gate ---
+# The routine's own first lesson (2026-09-01) was "do not tune any rule until at
+# least 30 closed paper trades are logged". It then tuned three times at 5, 6 and
+# 7 trades. This constant makes that gate a MECHANICAL constraint: below it, the
+# routine may still write lessons and proposals, but it may NOT auto-apply a knob.
+# A streak smaller than this is indistinguishable from variance, and tuning on it
+# is how a system talks itself into a corner.
+MIN_CLOSED_TRADES_TO_TUNE = 30
 
 # --------------------------------------------------------------------------- #
 # Self-healing (OPERATIONAL knobs — NOT strategy; safe for autonomous runs)

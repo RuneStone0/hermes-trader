@@ -23,6 +23,7 @@ import db
 import wording
 import fees
 import market
+import guards
 from alpaca_rest import AlpacaClient, AlpacaError
 
 ET = ZoneInfo("America/New_York")
@@ -82,24 +83,20 @@ def _orb_setup(bars: list, equity: float) -> dict | None:
     target = entry + mult * rng if side == "long" else entry - mult * rng
     risk_dollars = equity * config.RISK_PCT_PER_TRADE
     shares = max(1, int(risk_dollars / rng))
+    # `last` = the current 5-min close. The plan's entry is the RANGE EDGE, but
+    # the order is a market order, so it fills at whatever the tape says NOW —
+    # and the stop stays pinned at the opposite side of the range. Re-checking
+    # every tick from 10:00 onward means a 10:05 breakout found at 15:30 was
+    # planned as a 1x-range risk and would actually be entered several ranges
+    # away from its own stop. chase_pct guards that: too far past the edge and
+    # the setup is STALE — pass on it rather than buy the top of the move.
+    last = float(post[-1]["c"])
+    chase_pct = (last - entry) / entry * 100 if entry else 0.0
+    if side == "short":
+        chase_pct = -chase_pct
     return {"entry": entry, "stop": stop, "target": target, "side": side,
-            "shares": shares, "range": rng}
-
-
-def _regime(client: AlpacaClient) -> str:
-    try:
-        bars = client.bars(SYMBOL, timeframe="1Day", limit=25, start=None).get("bars", [])
-        if len(bars) < 21:
-            return "insufficient data"
-        closes = [float(b["c"]) for b in bars]
-        sma20 = sum(closes[-20:]) / 20
-        last = closes[-1]
-        slope = (closes[-1] - closes[-10]) / closes[-10] if closes[-10] else 0.0
-        trend = "above" if last > sma20 else "below"
-        direction = "rising" if slope > 0.003 else ("falling" if slope < -0.003 else "flat")
-        return f"SPY {trend} 20d-SMA ({last:.2f} vs {sma20:.2f}), 10d {direction}"
-    except Exception as e:
-        return f"regime unavailable: {e}"
+            "shares": shares, "range": rng, "last": last, "chase_pct": chase_pct,
+            "stale": chase_pct > float(config.DAILY.get("max_chase_pct", 0.25))}
 
 
 def _recent_perf() -> str:
@@ -155,8 +152,47 @@ def main() -> None:
     if not setup:
         db.log_event(ACCOUNT, "daily_orb", "skip", "no breakout yet today", dedup=True)
         return  # no breakout yet today; keep waiting
+    if setup["stale"]:
+        # A breakout this old is no longer an opening-range breakout: entering
+        # now means paying a price the stop (pinned to the opposite edge) was
+        # never sized for. Pass, and say why — silently skipping would hide a
+        # rule that fires almost every day.
+        st.update(decided=True, decision="no_go", note="breakout went stale")
+        _save_state(d, st)
+        db.log_event(ACCOUNT, "daily_orb", "no_go",
+                     f"Breakout is stale: price is {setup['chase_pct']:.2f}% past the "
+                     f"{setup['entry']:.2f} range edge (limit {config.DAILY.get('max_chase_pct')}%)")
+        return
 
-    # 5. Fee-adjusted R:R gate.
+    # 4b. One position per symbol — the existing bracket already owns the exit.
+    #     (Without this, a second ORB entry could stack on a symbol still held
+    #     from a previous session, with a second bracket whose legs only cover
+    #     the new shares.)
+    if SYMBOL in {p["symbol"]: p for p in positions}:
+        db.log_event(ACCOUNT, "daily_orb", "skip", f"already holding {SYMBOL}", dedup=True)
+        return
+
+    # 5. Deterministic gates BEFORE spending an LLM call: the drawdown governor
+    #    and the economic-calendar blackout. Cheap, auditable, and a refusal is
+    #    journaled so the dashboard shows why the setup was held back.
+    allowed, gate_reason = guards.entry_gate(ACCOUNT)
+    if not allowed:
+        st.update(decided=True, decision="blocked", note=gate_reason)
+        _save_state(d, st)
+        print(f"[daily] blocked: {gate_reason}")
+        db.log_event(ACCOUNT, "daily_orb", "blocked", f"Standing down: {gate_reason}")
+        return
+
+    fomc, fomc_why = guards.fomc_block_new_overnight()
+    if fomc:
+        st.update(decided=True, decision="blocked", note=fomc_why)
+        _save_state(d, st)
+        db.log_event(ACCOUNT, "daily_orb", "blocked",
+                     f"Standing down: {fomc_why} — a rate decision can gap "
+                     f"straight through the stop")
+        return
+
+    # 6. Fee-adjusted R:R gate.
     rr = fees.fee_adjusted_rr(setup["entry"], setup["target"], setup["stop"],
                               setup["side"], setup["shares"])
     if not rr["clears"]:
@@ -167,7 +203,9 @@ def main() -> None:
                      f"net R:R {rr['net_rr']} below floor {config.MIN_NET_RR} after fees")
         return
 
-    # 6. LLM decision gate.
+    # 7. LLM decision gate. The context is assembled by guards.context() so all
+    #    three bots see the SAME fields (regime, calendar, news, drawdown,
+    #    benchmark) in the same shape.
     ctx = {
         "strategy": "daily_orb", "symbol": SYMBOL, "side": setup["side"],
         "entry": round(setup["entry"], 2), "stop": round(setup["stop"], 2),
@@ -175,11 +213,11 @@ def main() -> None:
         "net_rr_after_fees": rr["net_rr"],
         "technical": (f"Opening-range ({config.DAILY['orb_start']}-{config.DAILY['orb_end']}) "
                       f"{setup['side']} breakout; range ${setup['range']:.2f}; "
-                      f"close beyond {setup['entry']:.2f}."),
-        "market_regime": _regime(client),
+                      f"close beyond {setup['entry']:.2f}; now {setup['last']:.2f} "
+                      f"({setup['chase_pct']:+.2f}% past the edge)."),
         "recent_performance": _recent_perf(),
-        "news": "no news feed (requires Alpaca data subscription)",
     }
+    ctx.update(guards.context(ACCOUNT, client, symbols=[SYMBOL]))
     try:
         decision = advisor.decide(ctx)
     except Exception as e:
@@ -200,9 +238,17 @@ def main() -> None:
     if decision["decision"] == "size_down":
         shares = max(1, int(shares * decision["size_multiplier"]))
 
+    # Risk-governor / event-day sizing. Applied AFTER the LLM's own size_down so
+    # the two are multiplicative — every actor here can only reduce size.
+    size_mult, size_reasons = guards.size_factor(ACCOUNT)
+    if size_mult < 1.0:
+        shares = max(1, int(shares * size_mult))
+        guards.note_size_adjust(ACCOUNT, "daily_orb", size_mult, size_reasons)
+
     print(f"[daily] {decision['decision'].upper()} {setup['side']} {SYMBOL} x{shares} "
           f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} target={setup['target']:.2f} "
-          f"| {decision['rationale']}")
+          f"| {decision['rationale']}"
+          + (f" | size {size_mult:.0%}" if size_mult < 1.0 else ""))
 
     if args.dry_run:
         return
@@ -236,7 +282,7 @@ def main() -> None:
     print(f"[daily] bracket order placed: {order.get('id')}")
     db.log_event(ACCOUNT, "daily_orb", "go",
                  wording.opened(SYMBOL, setup["side"], shares,
-                                decision.get("size_multiplier")),
+                                float(decision.get("size_multiplier") or 1.0) * size_mult),
                  detail=(f"entry~{setup['entry']:.2f} stop={setup['stop']:.2f} "
                          f"target={setup['target']:.2f} | {decision['rationale']}"))
 

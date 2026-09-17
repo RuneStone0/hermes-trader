@@ -33,6 +33,7 @@ _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback
                    "yolo": "YOLO", "selfheal": "Self-heal"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
+                    "blocked": "#d29922",
                     "fix": "#2ea043", "warn": "#d29922"}
 
 # Plain-English label + explanation for each journal badge. The dashboard is read
@@ -44,6 +45,7 @@ _DECISION_LABELS = {
     "exit":      ("Closed",    "The bot closed the position: its stop, its target, or its own call."),
     "no_go":     ("Passed",    "A setup appeared, but the bot decided not to trade it."),
     "skip":      ("No action", "Nothing to do this run: no setup, market closed, or it held an existing position."),
+    "blocked":   ("Held back", "A setup appeared and the strategy wanted it, but a risk or event guard stopped the order — see the reason."),
     "error":     ("Error",     "Something went wrong — worth a look."),
     "warn":      ("Warning",   "Something looked off, but the bot carried on."),
     "fix":       ("Fixed",     "The self-healing routine corrected a problem automatically."),

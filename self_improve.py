@@ -39,19 +39,104 @@ def _perf_summary() -> dict:
         closed = [t for t in trades if t["account"] == a and t["status"] == "closed"]
         n = len(closed)
         wins = sum(1 for t in closed if (t["net_pnl"] or 0) > 0)
+        # R-multiple, not dollars: on a $10k paper account "$20" says nothing
+        # about whether the ENTRY was any good — the agent's own risk per trade
+        # varied by 10x across the first seven trades. R normalises every trade
+        # to "how many times my initial risk did I make or lose", which is the
+        # only number that can be averaged meaningfully across different sizes.
+        rs: list[float] = []
+        for t in closed:
+            risk = _risk_dollars(t)
+            if risk and risk > 0 and t["net_pnl"] is not None:
+                rs.append(float(t["net_pnl"]) / risk)
+        try:
+            import risk_gov
+            gov = risk_gov.status(a)
+        except Exception as e:                                    # never block the review
+            gov = {"error": str(e)}
         out[a] = {
             "closed": n,
             "win_rate": round(wins / n, 3) if n else 0.0,
             "net_pnl": round(sum(t["net_pnl"] or 0 for t in closed), 2),
             "fees": round(sum(t["fees"] or 0 for t in closed), 2),
+            "avg_R": round(sum(rs) / len(rs), 3) if rs else None,
+            "total_R": round(sum(rs), 2) if rs else None,
+            "worst_R": round(min(rs), 2) if rs else None,
+            "best_R": round(max(rs), 2) if rs else None,
+            "reached_1R_win": sum(1 for r in rs if r >= 1.0),
+            "stop_out_share": (round(sum(1 for t in closed
+                                      if (t["close_reason"] or "") == "stop") / n, 2)
+                               if n else None),
+            "risk_state": gov,
         }
     return out
+
+
+def _risk_dollars(t) -> float | None:
+    """Initial risk in dollars for a trade row (|entry - stop| x qty)."""
+    try:
+        e, s, q = t["entry_price"], t["stop_price"], t["qty"]
+        if e is None or s is None or not q:
+            return None
+        return abs(float(e) - float(s)) * abs(float(q))
+    except (TypeError, ValueError):
+        return None
+
+
+# Knob section -> the performance bucket whose sample size gates it. Global
+# knobs (RISK_PCT_PER_TRADE / MIN_NET_RR) are gated on the TOTAL across buckets.
+_SECTION_BUCKET = {"": "__total__", "DAILY": "daily", "WEEKLY": "weekly", "YOLO": "yolo"}
+
+
+def _tuning_gate(clean: dict, perf: dict) -> tuple[bool, str]:
+    """The mechanical sample gate. Below MIN_CLOSED_TRADES_TO_TUNE closed trades
+    in the relevant bucket, NO knob may be auto-applied.
+
+    This exists because the routine's own first lesson (2026-09-01) said exactly
+    that — "do not tune any rule until at least 30 closed paper trades are
+    logged" — and it then auto-applied three size reductions on the evidence of
+    5, 6 and 7 trades, each time reasoning about a losing streak that any 2:1
+    system produces ~6% of the time by chance. Proposals and lessons still get
+    written below the gate; only the APPLY is blocked.
+    """
+    total = sum(int(perf.get(a, {}).get("closed") or 0) for a in ACCOUNTS)
+    need = int(getattr(config, "MIN_CLOSED_TRADES_TO_TUNE", 30))
+    blockers: list[str] = []
+    for sec in clean:
+        bucket = _SECTION_BUCKET.get(sec.upper() if sec else "", "__total__")
+        n = total if bucket == "__total__" else int(perf.get(bucket, {}).get("closed") or 0)
+        if n < need:
+            blockers.append(f"{sec or 'GLOBAL'} ({n}/{need} closed trades)")
+    if blockers:
+        return False, ("sample gate: " + ", ".join(blockers))
+    return True, ""
 
 
 def _tail(path, n: int = 2000) -> str:
     if not path.exists():
         return ""
     return path.read_text()[-n:]
+
+
+def _market_context() -> dict:
+    """Regime + upcoming-event context for the review, so proposals can be
+    regime-aware ('chop: this rule is a trend rule') instead of only
+    loss-aware. Entirely best-effort: any failure returns {} and the review
+    still runs — the routine must never be blocked by a data source."""
+    ctx: dict = {}
+    try:
+        import market_ctx
+        from alpaca_rest import AlpacaClient
+        ctx["regime"] = market_ctx.regime(AlpacaClient("daily"))
+    except Exception as e:
+        ctx["regime"] = f"unavailable: {e}"
+    try:
+        import econ
+        ctx["upcoming_events"] = econ.brief(days=5)
+        ctx["today_events"] = [e["title"] for e in econ.high_impact_today()]
+    except Exception as e:
+        ctx["upcoming_events"] = f"unavailable: {e}"
+    return ctx
 
 
 def _write_overrides(clean: dict) -> None:
@@ -82,6 +167,7 @@ def main() -> None:
     db.init_db()
     perf = _perf_summary()
     knobs = config.tunable_knobs()
+    ctx = _market_context()
 
     system = (
         "You are a trading-system self-improvement analyst. Given performance "
@@ -96,12 +182,34 @@ def main() -> None:
         "You may move knobs within their allowed range. You can NEVER change a "
         "knob outside 'tunable_knobs' — the stop-loss, retail-only and BTC-only "
         "rules are off-limits. Do not propose anything that would violate them.\n"
+        "RISK CONTROLS ARE NOT YOURS TO LOOSEN. risk_state below is a "
+        "deterministic drawdown governor that already de-risks automatically; do "
+        "not propose shrinking size because of a losing streak or a drawdown it "
+        "already covers, and never propose a larger max_position_pct/max_risk_pct "
+        "while an account is below its high-water mark.\n"
+        "STATISTICAL DISCIPLINE — read this carefully:\n"
+        " * perf reports avg_R / total_R (risk-multiple) alongside dollars. Judge "
+        "the SYSTEM by R, never by dollars: a -$20 loss on $4 of risk is a much "
+        "worse trade than a -$60 loss on $40 of risk.\n"
+        " * A losing streak is NOT evidence of a broken strategy. At 2:1 "
+        "reward:risk a genuinely profitable system only needs ~33% winners and "
+        "will still lose 7 in a row roughly 6% of the time. Do not treat a streak "
+        "as a signal to cut risk.\n"
+        " * A sample below the sample gate cannot support a parameter change at "
+        "all; below it, write the change as a PROPOSAL with params {} and let it "
+        "stay pending.\n"
+        " * Before proposing anything, ask whether the observed result is better "
+        "explained by the REGIME (market_context below) than by the rule. Being "
+        "stopped out repeatedly in a chop regime is a regime mismatch, not proof "
+        "the entry rule is wrong.\n"
         "Respond with ONLY a JSON object (no markdown):\n"
         '{"lessons":[{"topic":"...","detail":"..."}],'
         '"proposals":[{"title":"...","rationale":"...","params":{...}}]}'
     )
     user = json.dumps({
         "performance": perf,
+        "sample_gate_closed_trades": config.MIN_CLOSED_TRADES_TO_TUNE,
+        "market_context": ctx,
         "existing_lessons": _tail(config.LESSONS_PATH),
         "existing_proposals": _tail(config.PROPOSALS_PATH),
         "tunable_knobs": knobs,
@@ -153,8 +261,21 @@ def main() -> None:
         if isinstance(params, dict) and not params:
             pending.append(p)  # structural — no tunable param -> human review
 
-    # --- 3. auto-apply tuned knobs (within floor) ---
-    applied = bool(clean)
+    # --- 3. auto-apply tuned knobs (within floor AND above the sample gate) ---
+    gate_ok, gate_reason = _tuning_gate(clean, perf) if clean else (False, "")
+    applied = bool(clean) and gate_ok
+    if clean and not gate_ok:
+        # The sample gate refused the change. This is a real, journaled outcome
+        # (it is the difference between "we chose not to tune" and "we could
+        # not tune") — and the proposals still land in strategy_proposals.md
+        # below, marked pending rather than silently dropped.
+        for p in proposals:
+            if isinstance(p, dict) and (p.get("params") or {}):
+                pending.append(p)
+        db.log_event("improve", "self_improve", "warn",
+                     f"Auto-tune held back — {gate_reason}",
+                     detail="; ".join(json.dumps(p.get("params") or {}, sort_keys=True)
+                                      for p in proposals if isinstance(p, dict)))
     if applied:
         _write_overrides(clean)
         for sec, vals in clean.items():
@@ -179,6 +300,16 @@ def main() -> None:
                     block.append(f"  `{json.dumps(p['params'], sort_keys=True)}`")
         if notes:
             block.append(f"  *notes: {'; '.join(notes)}*")
+    elif clean:
+        block += [f"\n## {stamp} — HELD BY SAMPLE GATE (not applied)"]
+        block.append(f"- *{gate_reason}* — the change is recorded here but not "
+                     f"applied; a sample this small cannot distinguish an edge "
+                     f"from variance.")
+        for p in proposals:
+            if isinstance(p, dict) and (p.get("params") or {}):
+                block.append(f"- **{p.get('title', 'proposal')}** — {p.get('rationale', '')}")
+                if p.get("params"):
+                    block.append(f"  `{json.dumps(p['params'], sort_keys=True)}`")
     if pending:
         block += [f"\n## {stamp} — PENDING REVIEW (structural, no auto-apply)"]
         for p in pending:
