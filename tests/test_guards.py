@@ -124,11 +124,14 @@ def test_equity_history_roundtrip() -> None:
     check("peak reads the max of the stored series",
           db.equity_peak("__test__") == max(r["equity"] for r in series),
           f"peak={db.equity_peak('__test__')}")
-    # Two DIFFERENT minutes must both be kept.
+    # Two DIFFERENT minutes must both be kept. (OR REPLACE, because this suite is
+    # re-runnable and the row may already exist from a previous run — a plain
+    # INSERT would fail on the (account, ts) primary key and look like a bug.)
     import datetime as _dt
     conn = db.connect()
     try:
-        conn.execute("INSERT INTO equity_history (account, ts, equity, cash) VALUES (?,?,?,?)",
+        conn.execute("INSERT OR REPLACE INTO equity_history "
+                     "(account, ts, equity, cash) VALUES (?,?,?,?)",
                      ("__test__", (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=5))
                       .strftime("%Y-%m-%dT%H:%M:00+00:00"), 10123.0, 10123.0))
         conn.commit()

@@ -15,6 +15,10 @@ Sources (both public, no auth, verified 2026-09-17):
   * FALLBACK  Forex Factory weekly XML. Used ONLY when TradingView fails.
               Its .json mirror 429s from this host and the forexfactory.com
               HTML page sits behind Cloudflare — do NOT scrape the HTML page.
+              NOTE: this feed's <time> column follows the CALLER's timezone,
+              not US-Eastern — see the FF_TIME_TZ block below. Reading it as ET
+              put every fallback release 4-5 hours late, i.e. into the wrong
+              blackout window.
 
 FAIL OPEN, ALWAYS. This module is advisory. A missing cache, DNS failure, HTTP
 429/5xx, a malformed payload, an unparseable date or an empty event list must
@@ -37,7 +41,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
@@ -315,7 +319,44 @@ def _fetch_tradingview() -> list[dict]:
 
 # --------------------------------------------------------------------------- #
 # Source 2 — Forex Factory weekly XML (fallback)
+#
+# <time> semantics: READ THE FF_TIME_TZ BLOCK BELOW BEFORE CHANGING ANYTHING.
 # --------------------------------------------------------------------------- #
+# The FF weekly XML carries a bare wall-clock with no timezone marker, and the
+# zone that clock is on is NOT fixed: the feed reports in the timezone IT
+# thinks the caller is in. Verified live from this host (UTC) on 2026-09-17 by
+# matching FF rows against TradingView, which is authoritative here (FOMC at
+# 14:00 ET, initial claims 08:30 ET, Industrial Production 09:15 ET):
+#
+#   event                        FF <time>   truth (TradingView)   FF-as-ET
+#   FOMC Statement 09-16         6:00pm      18:00Z (14:00 ET)     22:00Z  X
+#   FOMC Member Bowman 09-18     1:30pm      13:30Z (09:30 ET)     17:30Z  X
+#   Unemployment Claims 09-17    12:30pm     12:30Z (08:30 ET)     16:30Z  X
+#
+# Every row's clock digits equal TradingView's UTC digits, so from a UTC host
+# FF's <time> column is UTC, and reading it as US-Eastern would shift every
+# fallback event 4h (EDT) to 5h (EST) LATE — straight into the wrong blackout
+# window. Both this host and the trading container run UTC (the Dockerfile and
+# docker-compose.yml set no TZ), so UTC is the correct default.
+#
+# If a future deployment sees FF serving America/New_York (or any other zone),
+# override at runtime with ECON_FF_TZ=America/New_York — no code change needed.
+# tests/test_econ.py covers BOTH readings so the behaviour is pinned either way.
+def _ff_timezone() -> tzinfo:
+    name = (os.environ.get("ECON_FF_TZ") or "").strip()
+    if not name:
+        return timezone.utc
+    if name.upper() in ("UTC", "Z", "GMT"):
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except Exception:  # bad/unknown zone name -> fail open to the verified default
+        _warn(f"ECON_FF_TZ={name!r} is not a known timezone — using UTC")
+        return timezone.utc
+
+
+FF_TIME_TZ = _ff_timezone()
+
 _XML_DECL = re.compile(r"^\s*<\?xml[^>]*\?>")
 _FF_DATE = re.compile(r"^(\d{2})-(\d{2})-(\d{4})$")
 _FF_TIME = re.compile(r"^(\d{1,2}):(\d{2})\s*(am|pm)$")
@@ -324,10 +365,10 @@ _FF_TIME = re.compile(r"^(\d{1,2}):(\d{2})\s*(am|pm)$")
 def ff_hm(time_s: str) -> tuple[int, int]:
     """FF wall-clock time -> (hour24, minute).
 
-    FF emits bare US-Eastern wall-clock with NO timezone marker ('2:30am').
-    An empty <time/> means an all-day item; treat it as 00:00 ET rather than
-    dropping the row, so the caller decides (same for 'All Day' / 'Tentative'
-    if FF ever emits them as text).
+    FF emits a bare clock with NO timezone marker ('2:30am'). An empty <time/>
+    means an all-day item; treat it as 00:00 rather than dropping the row, so
+    the caller decides (same for 'All Day' / 'Tentative' if FF ever emits them
+    as text).
     """
     s = (time_s or "").strip().lower()
     m = _FF_TIME.match(s)
@@ -339,22 +380,20 @@ def ff_hm(time_s: str) -> tuple[int, int]:
     return h, int(m.group(2))
 
 
-def ff_dt(date_s: str, time_s: str) -> datetime | None:
-    """FF date '09-18-2026' + time '2:30am' -> aware ET datetime, else None.
+def ff_dt(date_s: str, time_s: str, tz: "tzinfo | None" = None) -> datetime | None:
+    """FF date '09-18-2026' + time '2:30am' -> aware datetime in FF_TIME_TZ.
 
-    CRITICAL: these are US-EASTERN (America/New_York) wall-clock values. They
-    must go through ZoneInfo so EDT/EST is applied correctly — a 08:30am ET CPI
-    print has to come out as 12:30Z in summer and 13:30Z in winter. Treating
-    them as UTC would put every release 4-5 hours late and blackout the wrong
-    window.
+    The zone is interpreted (not guessed): see the FF_TIME_TZ block above. This
+    used to read as America/New_York and put every fallback release 4-5 hours
+    late; keep `tz` injectable so tests pin both readings.
     """
     m = _FF_DATE.match((date_s or "").strip())
-    if not m:
+    if m is None:
         return None
     mm, dd, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
     hh, mi = ff_hm(time_s)
     try:
-        return datetime(yy, mm, dd, hh, mi, tzinfo=ET)
+        return datetime(yy, mm, dd, hh, mi, tzinfo=tz or FF_TIME_TZ)
     except ValueError:
         return None
 
@@ -366,12 +405,13 @@ def _xml_text(ev: ElementTree.Element, tag: str) -> str:
     return el.text.strip()
 
 
-def parse_ff_xml(raw: bytes | str) -> list[dict]:
+def parse_ff_xml(raw: bytes | str, tz: "tzinfo | None" = None) -> list[dict]:
     """Parse the FF weekly XML into normalized events.
 
     Accepts bytes (the real response, windows-1252 per its declaration) or a
     str (tests / a cached copy). Holiday rows and unparseable dates/empty
     titles are skipped — a bad row never aborts the batch.
+    `tz` overrides FF_TIME_TZ (tests pin both the UTC and the ET reading).
     """
     if isinstance(raw, str):
         # ElementTree refuses a str that still carries an encoding declaration.
@@ -382,7 +422,7 @@ def parse_ff_xml(raw: bytes | str) -> list[dict]:
         impact = _xml_text(ev, "impact").lower()
         if impact == "holiday":
             continue  # market closure, not a release worth a blackout
-        ts = ff_dt(_xml_text(ev, "date"), _xml_text(ev, "time"))
+        ts = ff_dt(_xml_text(ev, "date"), _xml_text(ev, "time"), tz=tz)
         title = _xml_text(ev, "title")
         if ts is None or not title:
             continue

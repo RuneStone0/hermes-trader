@@ -30,7 +30,20 @@ import schedule
 ACCOUNTS = ("daily", "weekly", "yolo")
 _STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
 _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback",
+                   "mr_rsi2": "Mean reversion",
                    "yolo": "YOLO", "selfheal": "Self-heal"}
+# An account can host more than one sleeve: the daily ACCOUNT runs the SPY
+# opening-range breakout AND the mean-reversion sleeve (separate strategies, one
+# account, separate risk budgets). The account card's "last decision" line must
+# consider both — but NOT selfheal, which logs against the account too and is
+# repair work rather than a trade decision.
+_ACCOUNT_STRATEGIES = {
+    "daily": ("daily_orb", "mr_rsi2"),
+    "weekly": ("weekly_pullback",),
+    "yolo": ("yolo",),
+}
+_ACCOUNT_LABEL = {"daily": "Daily ORB + Mean reversion", "weekly": "Weekly pullback",
+                  "yolo": "YOLO"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
                     "blocked": "#d29922",
@@ -103,6 +116,15 @@ _RR_HINT = ("<span class='hint' tabindex='0' role='button' data-name='Risk : Rew
 _PNL_HINT = ("<span class='hint' tabindex='0' role='button' data-name='Open P&amp;L' "
              "data-desc='Unrealized profit/loss on this open position, marked to the latest "
              "price (refreshed by reconcile every ~10 min).'>P&amp;L</span>")
+# Realized R column. R is the only size-independent score: the bots have risked
+# anywhere from $3 to $43 on a single trade, so -$20 means nothing until it is
+# divided by what was actually at stake.
+_R_HINT = ("<span class='hint' tabindex='0' role='button' data-name='R multiple' "
+           "data-desc='The result measured in units of the risk taken at entry "
+           "(net P/L divided by the distance from entry to stop). -1.00R means the "
+           "stop filled exactly as planned; -1.74R means the price gapped through "
+           "it; +2.00R means the target filled. Averaged over many trades this is "
+           "the bot&apos;s real edge.'>R</span>")
 
 # Trading candlestick favicon (dark card + 3 candles, dashboard palette),
 # inlined as a data URI so the HTML stays fully self-contained.
@@ -168,6 +190,13 @@ tr:last-child td{border-bottom:none}.panel>table>thead>tr>th{border-bottom:1px s
 .spark{width:100%;height:auto;display:block;margin-top:4px}
 .spark path{fill:none;stroke:var(--accent);stroke-width:2}
 .spark .zero{stroke:var(--border);stroke-dasharray:4 4}
+/* Benchmark overlay: SPY buy-and-hold in the same units as the bot's curve.
+   Muted and dashed so the bot's own line stays the subject, but visible enough
+   that "we are up" can never be read without "so was the market". */
+.spark .bench{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4;opacity:.85}
+.card-sub.legend{margin-top:6px;font-size:11px}
+.lg{display:inline-block;width:14px;height:0;border-top:2px solid var(--accent);vertical-align:middle}
+.lg.dashed{border-top:1.5px dashed var(--muted);width:12px}
 .footer{color:var(--muted);font-size:12px;margin-top:28px;padding-top:16px;border-top:1px solid var(--border);line-height:1.6}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
 /* --- sticky top menu bar (title + nav, saves page space) --- */
@@ -284,12 +313,14 @@ def _portfolio_card(equity, cash, sub: str = "") -> str:
             f"<div class='card-sub'>{sub_txt}</div></div>")
 
 
-def _netpl_card(net, capital) -> str:
+def _netpl_card(net, capital, bench=None) -> str:
     """Net P/L card: % return vs starting capital (primary), then the net $.
 
     The % is fee-inclusive (net). The gross/fees breakdown is intentionally NOT
     shown (it duplicated the $ figure and the per-trade fees already live in the
-    decision-log detail).
+    decision-log detail). `bench` = (pct, from_date, to_date) for SPY
+    buy-and-hold over the SAME window, because a return only means something
+    relative to what the market was doing.
     """
     pct = None
     if capital:
@@ -304,8 +335,15 @@ def _netpl_card(net, capital) -> str:
         sign = "+" if pct > 0 else ""
         val = f"{sign}{pct:.2f}%"
         amt = f"<span class='amt'>{_money(net)}</span>"
+    sub = ""
+    if bench and pct is not None:
+        bpct, d0, d1 = bench
+        clsb = "pos" if bpct > 0 else ("neg" if bpct < 0 else "")
+        sub = (f"<div class='card-sub'>vs SPY buy-and-hold "
+               f"<span class='{clsb}'>{bpct:+.2f}%</span> "
+               f"<span class='muted'>({html.escape(d0)} → {html.escape(d1)})</span></div>")
     return (f"<div class='card'><div class='card-title'>Net P/L</div>"
-            f"<div class='card-value {cls}'>{val}{amt}</div></div>")
+            f"<div class='card-value {cls}'>{val}{amt}</div>{sub}</div>")
 
 
 def _starting_capital(account: str, st: dict | None = None) -> float | None:
@@ -317,9 +355,14 @@ def _starting_capital(account: str, st: dict | None = None) -> float | None:
     return config.STARTING_CAPITAL.get(account)
 
 
-def _sparkline(points, w: int = 920, h: int = 60) -> str:
-    """A short, axis-less equity sparkline (fits inside a card)."""
-    ys = [p[1] for p in points]
+def _sparkline(points, w: int = 920, h: int = 60, bench=None) -> str:
+    """A short, axis-less equity sparkline (fits inside a card).
+
+    `bench` (optional) draws SPY buy-and-hold over the same points in the same
+    units, so the card answers "did the bot beat just holding the index?" instead
+    of only "is the line up?".
+    """
+    ys = [p[1] for p in points] + [b[1] for b in (bench or [])]
     lo, hi = min(ys), max(ys)
     if lo == hi:
         hi = lo + 1
@@ -334,16 +377,22 @@ def _sparkline(points, w: int = 920, h: int = 60) -> str:
     def sy(y: float) -> float:
         return h - 4 - (y - lo) / (hi - lo) * (h - 8)
 
-    d = " ".join(("M" if i == 0 else "L") + f"{sx(i):.1f},{sy(p[1]):.1f}"
-                 for i, p in enumerate(points))
+    def path(pts) -> str:
+        return " ".join(("M" if i == 0 else "L") + f"{sx(i):.1f},{sy(p[1]):.1f}"
+                        for i, p in enumerate(pts))
+
+    d = path(points)
     zero = ""
     if lo <= 0 <= hi:
         zy = sy(0.0)
         zero = f"<line x1='6' y1='{zy:.1f}' x2='{w-6}' y2='{zy:.1f}' class='zero'/>"
-    return f"<svg viewBox='0 0 {w} {h}' class='spark'>{zero}<path d='{d}'/></svg>"
+    bench_path = (f"<path class='bench' d='{path(bench)}'/>"
+                  if bench and len(bench) == n and n > 1 else "")
+    return (f"<svg viewBox='0 0 {w} {h}' class='spark'>{zero}{bench_path}"
+            f"<path d='{d}'/></svg>")
 
 
-def _curve_card(points) -> str:
+def _curve_card(points, bench=None) -> str:
     """Compact equity-curve card (a tiny sparkline) for the top summary grid."""
     title = ("<div class='card-title'>Equity curve "
              "<span class='muted' style='text-transform:none;letter-spacing:0'>"
@@ -351,7 +400,12 @@ def _curve_card(points) -> str:
     if not points:
         return (f"<div class='card curve-card'>{title}"
                 f"<div class='card-sub'>No closed trades yet.</div></div>")
-    return f"<div class='card curve-card'>{title}{_sparkline(points)}</div>"
+    legend = ""
+    if bench and len(bench) == len(points):
+        legend = ("<div class='card-sub legend'>this bot "
+                  "<span class='lg solid'></span> · SPY buy-and-hold "
+                  "<span class='lg dashed'></span></div>")
+    return f"<div class='card curve-card'>{title}{_sparkline(points, bench=bench)}{legend}</div>"
 
 
 def _fmt_ts(s: str) -> str:
@@ -490,6 +544,89 @@ def _risk_usd(r) -> float | None:
     if not r["entry_price"] or not r["stop_price"]:
         return None
     return float(r["qty"]) * _mult(r) * abs(float(r["entry_price"]) - float(r["stop_price"]))
+
+
+def _bench_series() -> list[dict]:
+    """Cached SPY daily closes (written by reconcile) for benchmark comparisons."""
+    try:
+        return db.benchmark_series("SPY", days=400)
+    except Exception:
+        return []
+
+
+def _bench_return(since_iso: str | None) -> tuple[float, str, str] | None:
+    """SPY's % return since `since_iso` (or since the first recorded close).
+
+    Returns (pct, from_date, to_date) or None when there is not enough data —
+    never a guess. The bots were being judged against ZERO, which flatters a flat
+    tape: the daily bot looked fine at +$9.27 in Sep 2026 while SPY was -0.06%,
+    and the honest question is always "versus just holding the index".
+    """
+    series = _bench_series()
+    if len(series) < 2:
+        return None
+    day = (str(since_iso)[:10] if since_iso else "") or series[0]["d"]
+    window = [p for p in series if p["d"] >= day] or series
+    if len(window) < 2 or not window[0]["close"]:
+        return None
+    pct = (window[-1]["close"] / window[0]["close"] - 1) * 100.0
+    return pct, window[0]["d"], window[-1]["d"]
+
+
+def _bench_curve(points, capital: float | None) -> list | None:
+    """SPY buy-and-hold in the SAME units as the equity-curve points ($ P/L).
+
+    Aligned per point by date, so the two lines are directly comparable: what the
+    same starting capital would have done simply holding the index from the day
+    the account started trading.
+    """
+    if not points or not capital:
+        return None
+    series = _bench_series()
+    if len(series) < 2 or not series[0]["close"]:
+        return None
+    base = series[0]["close"]
+    by_day = {p["d"]: p["close"] for p in series}
+    days = sorted(by_day)
+    out = []
+    for (ts, _cum) in points:
+        d = str(ts)[:10]
+        # nearest recorded close at or before this point's date
+        chosen = None
+        for cand in reversed(days):
+            if cand <= d:
+                chosen = by_day[cand]
+                break
+        if chosen is None:
+            chosen = base
+        out.append((ts, capital * (chosen / base - 1)))
+    return out
+
+
+def _realized_r(r) -> float | None:
+    """Realized R multiple = net P/L ÷ the risk actually taken at entry.
+
+    R is the only figure that can be averaged across trades of different size: on
+    a $10k paper account the bots risked anywhere from $3 to $43 a trade, so "-$20"
+    says nothing on its own, while "-1.0R" says the stop did its job and "-1.74R"
+    says the position gapped through it. This is the number the self-improvement
+    loop and the review both reason in.
+    """
+    risk = _risk_usd(r)
+    if not risk or r["status"] != "closed" or r["net_pnl"] is None:
+        return None
+    try:
+        return float(r["net_pnl"]) / float(risk)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _r_text(r: float | None) -> str:
+    """Sign-first R formatting, matching the money convention (-$43.42)."""
+    if r is None:
+        return "—"
+    sign = "+" if r > 0 else ("-" if r < 0 else "")
+    return f"{sign}{abs(r):.2f}R"
 
 
 def _max_loss(r) -> float | None:
@@ -714,13 +851,15 @@ def _open_rows(rows, eq: dict, with_account: bool = False) -> str:
 # --- closed trades table ---------------------------------------------------- #
 
 def _closed_rows(rows, with_account: bool = True) -> str:
-    ncol = 10 if with_account else 8
+    ncol = 11 if with_account else 9
     if not rows:
         return f"<tr><td colspan='{ncol}' class='muted'>None yet.</td></tr>"
     out = []
     for r in rows:
         pnl = r["net_pnl"] or 0
         cls = "pos" if pnl > 0 else ("neg" if pnl < 0 else "")
+        rmul = _realized_r(r)
+        rcls = "pos" if (rmul or 0) > 0 else ("neg" if (rmul or 0) < 0 else "")
         side_cls = "long" if r["side"] == "long" else "short"
         acct = ""
         if with_account:
@@ -734,6 +873,7 @@ def _closed_rows(rows, with_account: bool = True) -> str:
             f"<td class='mono'>{r['qty']:g}</td>"
             f"<td>{_money(r['entry_price'])}</td>"
             f"<td>{_money(r['exit_price'])}</td>"
+            f"<td class='mono {rcls}'>{_r_text(rmul)}</td>"
             f"<td class='{cls}'>{_money(pnl)}</td></tr>"
         )
         out.append(_detail_row_html(r, None, ncol))
@@ -856,9 +996,10 @@ def _page(title: str, active: str, body: str) -> str:
 def _closed_th(with_account: bool) -> str:
     if with_account:
         return ("<tr><th>Closed</th><th>Why</th><th>Account</th><th>Strategy</th><th>Symbol</th>"
-                "<th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Net P/L</th></tr>")
+                f"<th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>{_R_HINT}</th>"
+                "<th>Net P/L</th></tr>")
     return ("<tr><th>Closed</th><th>Why</th><th>Symbol</th><th>Side</th><th>Qty</th>"
-            "<th>Entry</th><th>Exit</th><th>Net P/L</th></tr>")
+            f"<th>Entry</th><th>Exit</th><th>{_R_HINT}</th><th>Net P/L</th></tr>")
 
 
 def _positions_trades_block(open_rows, closed_rows, eq: dict, with_account: bool = False) -> str:
@@ -907,7 +1048,8 @@ def _overview_body() -> str:
         # Show the last MEANINGFUL decision — skip transient connectivity blips so
         # a stale DNS/5xx hiccup never headlines a healthy bot. The age is shown
         # too: hiding an old entry would mask a bot that has stopped trading.
-        evs = db.recent_events(30, account=a, strategy=_STRATEGY[a])
+        evs = [e for e in db.recent_events(40, account=a)
+               if e["strategy"] in _ACCOUNT_STRATEGIES.get(a, (_STRATEGY[a],))]
         le = next((e for e in evs
                    if not (e["decision"] == "error" and _is_transient(e["reason"]))), None)
         last_line = ""
@@ -943,6 +1085,8 @@ def _overview_body() -> str:
     for t in closed_sorted:
         cum += (t["net_pnl"] or 0)
         curve_pts.append((t["exit_time"], cum))
+    inception = min((t["created_at"] for t in closed_sorted), default=None)
+    bench = _bench_return(inception)
 
     recent = [t for t in reversed(closed_sorted)
               if _within_hours(t["exit_time"] or t["created_at"], 48)]
@@ -951,11 +1095,11 @@ def _overview_body() -> str:
 <h2>All accounts</h2>
 <div class='grid'>
 {_portfolio_card(total_eq, total_cash, sub=f"{len(eq_vals)} account{'s' if len(eq_vals) != 1 else ''}")}
-{_netpl_card(s_all["net"], total_cap)}
+{_netpl_card(s_all["net"], total_cap, bench)}
 {_card("Closed trades", str(s_all["n"]))}
 {_card("Win rate", f"{s_all['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
-{_curve_card(curve_pts)}
+{_curve_card(curve_pts, _bench_curve(curve_pts, total_cap))}
 </div>
 
 <h2>Positions &amp; trades</h2>
@@ -986,18 +1130,21 @@ def _account_body(account: str) -> str:
 
     recent = [t for t in reversed(closed_sorted)
               if _within_hours(t["exit_time"] or t["created_at"], 48)]
-    label = _STRATEGY_LABEL.get(_STRATEGY[account], account)
+    label = _ACCOUNT_LABEL.get(account, _STRATEGY_LABEL.get(_STRATEGY[account], account))
     sa = st.get(account, {})
+    capital = _starting_capital(account, st)
+    inception = min((t["created_at"] for t in trades), default=None)
+    bench = _bench_return(inception)
 
     return f"""
-<div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong></div>
+<div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong>{_gov_meta(account)}</div>
 <div class='grid'>
 {_portfolio_card(sa.get("equity"), sa.get("cash"))}
-{_netpl_card(s["net"], _starting_capital(account, st))}
+{_netpl_card(s["net"], capital, bench)}
 {_card("Closed trades", str(s["n"]))}
 {_card("Win rate", f"{s['win_rate']:.0%}")}
 {_card("Open positions", str(len(open_t)))}
-{_curve_card(curve_pts)}
+{_curve_card(curve_pts, _bench_curve(curve_pts, capital))}
 </div>
 
 <h2>Positions &amp; trades</h2>
@@ -1010,6 +1157,46 @@ def _account_body(account: str) -> str:
 {_events_rows(events)}</table></div>
 </details>
 """
+
+
+def _gov_meta(account: str) -> str:
+    """A slim risk-governor readout for the page-meta line (no extra card).
+
+    The value itself carries the tooltip (the established convention here — the
+    metric IS the hover target), so it explains itself without an icon telling
+    the reader to click something.
+    """
+    try:
+        import risk_gov
+        g = risk_gov.status(account)
+    except Exception:
+        return ""
+    if not g.get("enabled"):
+        return ""
+    bits = []
+    dd = g.get("drawdown_pct")
+    if dd is not None:
+        bits.append(
+            f"<span class='hint' tabindex='0' role='button' data-name='Drawdown' "
+            f"data-desc='How far the account sits below its highest recorded value. "
+            f"The bot trims position size as this deepens, and restores it as the "
+            f"account recovers — it never ratchets.'>drawdown <strong>{dd:.1f}%</strong></span>")
+    mult = g.get("size_multiplier") or 1.0
+    if mult < 1.0:
+        bits.append(
+            f"<span class='hint' tabindex='0' role='button' data-name='Position sizing' "
+            f"data-desc='New positions are being sized at this share of the bot&apos;s "
+            f"normal size: {html.escape(str(g.get('size_reason') or ''))}'>"
+            f"sizing <strong>{mult:.0%}</strong></span>")
+    if not g.get("can_open", True):
+        bits.append(
+            f"<span class='hint' tabindex='0' role='button' data-name='New entries paused' "
+            f"data-desc='The risk governor is refusing NEW positions right now "
+            f"({html.escape(str(g.get('gate_reason') or ''))}). Existing positions keep "
+            f"their stops and targets.'><strong>new entries paused</strong></span>")
+    if not bits:
+        return ""
+    return " <span class='muted'>·</span> " + " <span class='muted'>·</span> ".join(bits)
 
 
 def build() -> str:

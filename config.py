@@ -157,6 +157,14 @@ DAILY = {
     # 15:30 would risk several multiples of the intended size. 0.25% keeps the
     # realised risk within a few percent of the plan.
     "max_chase_pct": 0.25,
+    # The ORB has NO demonstrated edge: the walk-forward backtest
+    # (reports/backtest_2026-09.md) measured avgR -0.01 over 57 real 5-min trades
+    # (t -0.09) and -0.06 over a 327-trade daily proxy (t -0.69), with a 95% CI
+    # straddling zero either way. That is not proof it loses — the sample is too
+    # small to say — so it keeps trading and keeps gathering evidence, but at HALF
+    # the risk of the sleeve that does have evidence (MR). Revisit when it has 30+
+    # closed trades of its own; that is the weekly review's job, not a guess now.
+    "risk_pct": 0.005,
 }
 DAILY_TUNE = {
     "rr_multiple": (0.5, 3.0),
@@ -164,6 +172,7 @@ DAILY_TUNE = {
     "close_confirmation": (None, None),   # boolean, validated as bool
     "max_trades_per_day": (1, 5),
     "max_chase_pct": (0.05, 2.0),
+    "risk_pct": (0.002, 0.02),
 }
 
 # --------------------------------------------------------------------------- #
@@ -184,6 +193,76 @@ WEEKLY_TUNE = {
     "atr_period": (5, 40),
     "stop_atr": (0.5, 3.0),
     "target_atr": (0.5, 5.0),
+}
+
+# --------------------------------------------------------------------------- #
+# Mean-reversion sleeve (mr_run.py) — added 2026-09-17 ON BACKTEST EVIDENCE
+# --------------------------------------------------------------------------- #
+# The three original bots were all trend/breakout rules and, measured over the
+# Sep 1-17 2026 chop tape, produced 9 trades and no edge. A stdlib walk-forward
+# backtest over 2019-2026 (trading/backtest_mr.py, reports/backtest_2026-09.md)
+# found the opposite ranking:
+#
+#   ORB_5min (the live rule, 4 months of 5-min data)  n=57   avgR -0.01  t -0.09
+#   ORB_daily proxy                                   n=327  avgR -0.06  t -0.69
+#   PULLBACK_weekly                                   n=76   avgR +0.11  t +0.77
+#   MR_rsi2  (this sleeve)                            n=775  avgR +0.12  t +6.33
+#   MR_atr_dip                                        n=177  avgR +0.21  t +3.60
+#   CTRL_long_beta (just hold ETFs in an uptrend)     n=2434 avgR +0.04  t +3.65
+#
+# The decisive test is the LAST row: long US equity ETFs in an uptrend make money
+# under almost any entry rule, so a positive expectancy alone proves nothing. MR's
+# edge over that control is +0.078R per trade (Welch t +3.71, 95% CI [+0.04,+0.12]
+# — excludes zero), and it survives 2 bp/side slippage. MR_rsi2 is preferred over
+# the higher-avgR MR_atr_dip because it carries 4x the sample, the higher t, a
+# positive sign in BOTH regimes (+0.15 chop / +0.11 trend) and both walk-forward
+# halves (+0.05 / +0.16); MR_atr_dip fired 0 times in the live window.
+#
+# HONEST CAVEATS, all of them relevant: 2019-2026 was one long bull market for
+# these ETFs; the control's trades overlap the MR trades in time (so its Welch t
+# understates the uncertainty); pooling 19 symbols ignores the fact that dips
+# cluster market-wide; and the shape is fragile — ~70% wins but avg win +0.37R
+# against avg loss -0.57R, i.e. the losses are fat when they come. Hence the
+# modest risk budget and the concurrency cap below, not max size.
+MR = {
+    "enabled": True,
+    "variant": "rsi2",              # rsi2 | atr_dip (see backtest_mr.py)
+    "risk_pct": 0.0075,             # per trade, % of equity
+    "max_concurrent": 2,            # dips cluster; cap the correlated basket
+    "max_position_pct": 0.20,       # notional ceiling per position
+    "rsi_period": 2,
+    "rsi_entry": 10.0,              # RSI(2) below this = the dip
+    "trend_sma": 200,               # close must be above this
+    "slope_sma": 50,                # ...and this one must be rising
+    "exit_sma": 5,                  # exit on a close above SMA(5)
+    "max_hold_days": 10,            # time stop (the backtest's max_hold)
+    "atr_period": 14,
+    "stop_atr": 2.5,                # hard stop distance, in ATR(14)
+    # The backtest had NO take-profit (exits were the rule, the stop or the time
+    # stop). Alpaca brackets require a target leg, so this is a deliberately WIDE
+    # outer cap that the rule exit normally beats to it — documented deviation,
+    # not a tuned parameter.
+    "target_atr": 4.0,
+    # Entries are evaluated only in the last 25 minutes of the session, because
+    # the tested signal is "the CLOSE is a dip" — not "the price dipped at some
+    # point during the day". Running the check all day would enter on intraday
+    # wicks the backtest never saw. The forming bar's close is the live price.
+    "entry_window_et": ["15:30", "15:55"],
+    # SPY is excluded on purpose: the daily ORB owns SPY on this account, and two
+    # sleeves holding the same symbol makes attribution (and bracket integrity)
+    # impossible. This is a plumbing choice, not a verdict on the evidence.
+    "universe": [
+        "QQQ", "IWM", "DIA", "XLF", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU",
+        "XLB", "XLE", "SMH", "GLD", "SLV", "TLT", "IEF", "HYG",
+    ],
+}
+MR_TUNE = {
+    "risk_pct": (0.002, 0.02),
+    "max_concurrent": (1, 5),
+    "rsi_entry": (2.0, 25.0),
+    "exit_sma": (2, 20),
+    "max_hold_days": (3, 30),
+    "stop_atr": (1.0, 4.0),
 }
 
 # --------------------------------------------------------------------------- #
@@ -334,6 +413,7 @@ __TUNE__: dict[str, dict] = {
     "DAILY": DAILY_TUNE,
     "WEEKLY": WEEKLY_TUNE,
     "YOLO": YOLO_TUNE,
+    "MR": MR_TUNE,
 }
 _IRREDUCIBLE = {"require_stop_loss", "allowed_assets", "crypto_allowlist",
                 "min_stop_dist_pct", "min_target_dist_pct", "symbol"}
@@ -373,12 +453,12 @@ def _apply_overrides() -> None:
 
     # --- strategy dicts ---
     for section, bound_map in (("DAILY", DAILY_TUNE), ("WEEKLY", WEEKLY_TUNE),
-                               ("YOLO", YOLO_TUNE)):
+                               ("YOLO", YOLO_TUNE), ("MR", MR_TUNE)):
         section_tune = __TUNE__.get(section, {})
         over = raw.get(section)
         if not isinstance(over, dict):
             continue
-        target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO}[section]
+        target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR}[section]
         for key, val in over.items():
             if key in _IRREDUCIBLE or key not in section_tune:
                 continue  # never touch the floor or an unknown knob
@@ -416,7 +496,8 @@ def tunable_knobs() -> list[dict]:
                         "MIN_NET_RR": TUNE_BOUNDS["MIN_NET_RR"]}),
             ("DAILY", DAILY, DAILY_TUNE),
             ("WEEKLY", WEEKLY, WEEKLY_TUNE),
-            ("YOLO", YOLO, YOLO_TUNE)):
+            ("YOLO", YOLO, YOLO_TUNE),
+            ("MR", MR, MR_TUNE)):
         for key, bounds in tune.items():
             if bounds is None:
                 continue
@@ -452,7 +533,8 @@ def _flat_knob(key: str):
                         "MIN_NET_RR": TUNE_BOUNDS["MIN_NET_RR"]}),
             ("DAILY", DAILY, DAILY_TUNE),
             ("WEEKLY", WEEKLY, WEEKLY_TUNE),
-            ("YOLO", YOLO, YOLO_TUNE)):
+            ("YOLO", YOLO, YOLO_TUNE),
+            ("MR", MR, MR_TUNE)):
         if key in tune:
             bounds = tune[key]
             if bounds is None:
@@ -473,10 +555,11 @@ def _tokenize(candidate: dict) -> dict:
     for key, val in candidate.items():
         if isinstance(val, dict):  # <SECTION>: {...}
             sec = key.upper()
-            if sec not in ("DAILY", "WEEKLY", "YOLO"):
+            if sec not in ("DAILY", "WEEKLY", "YOLO", "MR"):
                 continue
-            target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO}[sec]
-            tune = {"DAILY": DAILY_TUNE, "WEEKLY": WEEKLY_TUNE, "YOLO": YOLO_TUNE}[sec]
+            target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR}[sec]
+            tune = {"DAILY": DAILY_TUNE, "WEEKLY": WEEKLY_TUNE, "YOLO": YOLO_TUNE,
+                    "MR": MR_TUNE}[sec]
             for k, v in val.items():
                 if k in _IRREDUCIBLE or k not in tune or tune[k] is None:
                     continue
@@ -509,7 +592,7 @@ def propose_override(candidate: dict) -> tuple[dict, list[str]]:
     """
     notes: list[str] = []
     # Detect attempts to touch the floor (audit trail, but never applied).
-    for sec in ("DAILY", "WEEKLY", "YOLO"):
+    for sec in ("DAILY", "WEEKLY", "YOLO", "MR"):
         for k in _IRREDUCIBLE:
             if isinstance(candidate.get(sec), dict) and k in candidate[sec]:
                 notes.append(f"DROPPED irreducible floor knob {sec}.{k}")

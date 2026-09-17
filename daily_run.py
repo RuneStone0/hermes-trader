@@ -81,7 +81,7 @@ def _orb_setup(bars: list, equity: float) -> dict | None:
     stop = lo if side == "long" else hi
     mult = config.DAILY["rr_multiple"]
     target = entry + mult * rng if side == "long" else entry - mult * rng
-    risk_dollars = equity * config.RISK_PCT_PER_TRADE
+    risk_dollars = equity * config.DAILY.get("risk_pct", config.RISK_PCT_PER_TRADE)
     shares = max(1, int(risk_dollars / rng))
     # `last` = the current 5-min close. The plan's entry is the RANGE EDGE, but
     # the order is a market order, so it fills at whatever the tape says NOW —

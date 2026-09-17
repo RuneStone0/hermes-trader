@@ -193,7 +193,7 @@ FF_XML = """<?xml version="1.0" encoding="windows-1252"?>
 \t\t<title>CPI m/m</title>
 \t\t<country>USD</country>
 \t\t<date><![CDATA[09-18-2026]]></date>
-\t\t<time><![CDATA[2:30am]]></time>
+\t\t<time><![CDATA[12:30pm]]></time>
 \t\t<impact><![CDATA[High]]></impact>
 \t\t<forecast><![CDATA[0.3]]></forecast>
 \t\t<previous><![CDATA[0.2]]></previous>
@@ -202,7 +202,7 @@ FF_XML = """<?xml version="1.0" encoding="windows-1252"?>
 \t\t<title>Non-Farm Employment Change</title>
 \t\t<country>USD</country>
 \t\t<date><![CDATA[09-18-2026]]></date>
-\t\t<time><![CDATA[8:30am]]></time>
+\t\t<time><![CDATA[12:30pm]]></time>
 \t\t<impact><![CDATA[High]]></impact>
 \t\t<forecast />
 \t\t<previous><![CDATA[142K]]></previous>
@@ -229,7 +229,7 @@ FF_XML = """<?xml version="1.0" encoding="windows-1252"?>
 \t\t<title>German Ifo Business Climate</title>
 \t\t<country>EUR</country>
 \t\t<date><![CDATA[09-18-2026]]></date>
-\t\t<time><![CDATA[4:00am]]></time>
+\t\t<time><![CDATA[8:00am]]></time>
 \t\t<impact><![CDATA[Low]]></impact>
 \t\t<forecast />
 \t\t<previous />
@@ -237,16 +237,48 @@ FF_XML = """<?xml version="1.0" encoding="windows-1252"?>
 </weeklyevents>
 """
 
+# The spec's ET example ('2:30am' == 02:30 America/New_York) — used to pin the
+# ET reading, which is what you get with ECON_FF_TZ=America/New_York.
+FF_XML_ET_MODE = """<?xml version="1.0" encoding="windows-1252"?>
+<weeklyevents>
+\t<event>
+\t\t<title>CPI m/m</title>
+\t\t<country>USD</country>
+\t\t<date><![CDATA[09-18-2026]]></date>
+\t\t<time><![CDATA[2:30am]]></time>
+\t\t<impact><![CDATA[High]]></impact>
+\t\t<forecast />
+\t\t<previous />
+\t</event>
+\t<event>
+\t\t<title>Non-Farm Employment Change</title>
+\t\t<country>USD</country>
+\t\t<date><![CDATA[09-18-2026]]></date>
+\t\t<time><![CDATA[8:30am]]></time>
+\t\t<impact><![CDATA[High]]></impact>
+\t\t<forecast />
+\t\t<previous />
+\t</event>
+</weeklyevents>
+"""
 
-def test_ff_xml_et_to_utc_conversion():
+
+def test_ff_xml_timezone_default_is_utc():
+    """DEFAULT reading: FF clock digits == UTC (verified live 2026-09-17).
+
+    FF reported the 09-16 FOMC Statement as '6:00pm' (= 18:00Z, the real
+    14:00 ET release) and the 09-18 Bowman speech as '1:30pm' (= 13:30Z, which
+    TradingView confirms). Treating that clock as ET would be 4h late.
+    """
     evs = econ.parse_ff_xml(FF_XML)
     by_title = {e["title"]: e for e in evs}
 
     assert "Bank Holiday" not in by_title, "Holiday rows must be skipped"
 
     cpi = by_title["CPI m/m"]
-    # 2026-09-18 is EDT (UTC-4): 02:30 ET -> 06:30Z
-    assert cpi["ts"] == "2026-09-18T06:30:00Z", f"got {cpi['ts']}"
+    assert cpi["ts"] == "2026-09-18T12:30:00Z", f"got {cpi['ts']}"
+    # ...which is 08:30 ET — the real CPI/NFP release time
+    assert econ._parse_ts(cpi["ts"]).astimezone(econ.ET).strftime("%H:%M") == "08:30"
     assert cpi["date_et"] == "2026-09-18"
     assert cpi["country"] == "US", "USD must normalize to US"
     assert cpi["importance"] == 1
@@ -254,18 +286,36 @@ def test_ff_xml_et_to_utc_conversion():
     assert cpi["previous"] == "0.2"
 
     nfp = by_title["Non-Farm Employment Change"]
-    # THE canonical sanity check: 8:30am ET must read 12:30Z in summer.
     assert nfp["ts"] == "2026-09-18T12:30:00Z", f"got {nfp['ts']}"
     assert nfp["forecast"] is None
     assert nfp["previous"] == "142K", "non-numeric text must pass through"
 
     allday = by_title["All Day Item"]
-    assert allday["ts"] == "2026-09-18T04:00:00Z", "empty <time/> -> 00:00 ET (04:00Z)"
+    assert allday["ts"] == "2026-09-18T00:00:00Z", "empty <time/> -> 00:00"
+    assert allday["date_et"] == "2026-09-17", "00:00Z on 09-18 is 20:00 ET on 09-17"
 
     eur = by_title["German Ifo Business Climate"]
     assert eur["ts"] == "2026-09-18T08:00:00Z"
     assert eur["country"] == "EUR", "non-USD currency passes through unmapped"
     assert eur["importance"] == -1
+
+
+def test_ff_xml_et_mode_reading():
+    """The ECON_FF_TZ=America/New_York reading, per the spec's own example.
+
+    '09-18-2026' + '2:30am' -> 02:30 ET -> 06:30Z (EDT), and the canonical
+    sanity check: 8:30am ET -> 12:30Z.
+    """
+    et = econ.ET
+    evs = econ.parse_ff_xml(FF_XML_ET_MODE, tz=et)
+    by_title = {e["title"]: e for e in evs}
+    assert by_title["CPI m/m"]["ts"] == "2026-09-18T06:30:00Z", by_title["CPI m/m"]["ts"]
+    assert by_title["Non-Farm Employment Change"]["ts"] == "2026-09-18T12:30:00Z"
+    # Both readings must land a real 08:30 ET release on 12:30Z — that is the
+    # invariant the bots' 12:30Z checks rely on. (UTC mode: FF writes the
+    # release as '12:30pm'. ET mode: FF writes it as '8:30am'.)
+    assert econ.parse_ff_xml(FF_XML)[0]["ts"] == "2026-09-18T12:30:00Z"
+    assert econ.parse_ff_xml(FF_XML_ET_MODE, tz=et)[1]["ts"] == "2026-09-18T12:30:00Z"
 
 
 def test_ff_impact_mapping_table():
@@ -275,13 +325,38 @@ def test_ff_impact_mapping_table():
     assert econ._FF_IMPACT["holiday"] == -1
 
 
-def test_ff_dst_winter_offset():
-    """January is EST (UTC-5): 08:30 ET must be 13:30Z, not 12:30Z."""
-    winter = econ.ff_dt("01-15-2027", "8:30am")
-    assert winter is not None
-    assert econ._iso_z(winter) == "2027-01-15T13:30:00Z", econ._iso_z(winter)
-    summer = econ.ff_dt("07-15-2026", "8:30am")
-    assert econ._iso_z(summer) == "2026-07-15T12:30:00Z", econ._iso_z(summer)
+def test_ff_dst_offsets_under_et_mode():
+    """DST only matters for the ET reading; the UTC default is offset-free."""
+    et = econ.ET
+    assert econ._iso_z(econ.ff_dt("01-15-2027", "8:30am", tz=et)) == "2027-01-15T13:30:00Z"
+    assert econ._iso_z(econ.ff_dt("07-15-2026", "8:30am", tz=et)) == "2026-07-15T12:30:00Z"
+    # default (UTC) reading is the same clock all year
+    assert econ._iso_z(econ.ff_dt("01-15-2027", "8:30am")) == "2027-01-15T08:30:00Z"
+    assert econ._iso_z(econ.ff_dt("07-15-2026", "8:30am")) == "2026-07-15T08:30:00Z"
+
+
+def test_ff_timezone_env_override():
+    """ECON_FF_TZ switches the interpretation without a code change."""
+    import os
+    saved = os.environ.get("ECON_FF_TZ")
+    try:
+        os.environ.pop("ECON_FF_TZ", None)
+        assert econ._ff_timezone() is timezone.utc
+        os.environ["ECON_FF_TZ"] = "GMT"
+        assert econ._ff_timezone() is timezone.utc
+        os.environ["ECON_FF_TZ"] = "America/New_York"
+        assert econ._ff_timezone() == econ.ET
+        os.environ["ECON_FF_TZ"] = "UTC"
+        assert econ._ff_timezone() is timezone.utc
+        os.environ["ECON_FF_TZ"] = "Not/AZone"
+        out, printed = quiet(econ._ff_timezone)
+        assert out is timezone.utc, "a bad zone name must fail open to UTC"
+        assert "not a known timezone" in printed, printed
+    finally:
+        if saved is None:
+            os.environ.pop("ECON_FF_TZ", None)
+        else:
+            os.environ["ECON_FF_TZ"] = saved
 
 
 def test_ff_time_parsing_edges():
@@ -813,9 +888,11 @@ def main() -> int:
         ("tv payload keeps all three tiers", test_tv_payload_keeps_all_three_tiers),
         ("tv numbers strip trailing .0", test_tv_number_formatting_strips_trailing_dot_zero),
         ("tv bad envelope raises for refresh", test_tv_bad_envelope_raises_for_refresh_to_catch),
-        ("ff xml ET->UTC conversion", test_ff_xml_et_to_utc_conversion),
+        ("ff xml default (UTC) reading", test_ff_xml_timezone_default_is_utc),
+        ("ff xml ET-mode reading", test_ff_xml_et_mode_reading),
         ("ff impact mapping table", test_ff_impact_mapping_table),
-        ("ff DST winter vs summer offset", test_ff_dst_winter_offset),
+        ("ff DST offsets under ET mode", test_ff_dst_offsets_under_et_mode),
+        ("ff timezone env override", test_ff_timezone_env_override),
         ("ff time parsing edges", test_ff_time_parsing_edges),
         ("ff malformed xml does not escape", test_ff_xml_malformed_bytes_do_not_escape),
         ("min_importance filtering", test_min_importance_filtering),

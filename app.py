@@ -39,6 +39,11 @@ JOBS = [
      "market_gate": True, "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],
      "cmd": [sys.executable, "self_improve.py"], "timeout": 300},
+    # Mean-reversion sleeve on the daily account (mr_run.py). Its entries are
+    # close-based, so most ticks only manage exits — the job is cheap and the
+    # 15-min cadence keeps the rule exit responsive.
+    {"name": "mr", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 900,
+     "market_gate": True, "cmd": [sys.executable, "mr_run.py"], "timeout": 240},
     # Warm the economic-calendar cache BEFORE the session so the first decision
     # of the day never pays a network round-trip (and so a feed outage shows up
     # in the logs while the market is still closed). Twice a day keeps the 7-day

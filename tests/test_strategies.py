@@ -61,8 +61,15 @@ def test_fresh_long_breakout() -> None:
     check("stop at the range low", abs(s["stop"] - 99.0) < 1e-9, str(s["stop"]))
     check("target = entry + rr_multiple x range",
           abs(s["target"] - (100.0 + config.DAILY["rr_multiple"] * 1.0)) < 1e-9, str(s["target"]))
-    check("risk sizing = risk% x equity / range",
-          s["shares"] == max(1, int(10000.0 * config.RISK_PCT_PER_TRADE / 1.0)), str(s["shares"]))
+    # The ORB sizes off DAILY['risk_pct'] (0.5%), NOT the global 1% default: the
+    # backtest showed no demonstrated edge for the ORB, so it runs at half the
+    # risk of the mean-reversion sleeve that does have evidence.
+    expect = max(1, int(10000.0 * config.DAILY["risk_pct"] / 1.0))
+    check("risk sizing = DAILY risk% x equity / range",
+          s["shares"] == expect, f"{s['shares']} vs {expect}")
+    check("ORB risk is below the global default",
+          config.DAILY["risk_pct"] < config.RISK_PCT_PER_TRADE,
+          f"{config.DAILY['risk_pct']} < {config.RISK_PCT_PER_TRADE}")
     check("not stale when price is just past the edge", s["stale"] is False,
           f"chase {s['chase_pct']:.3f}%")
 

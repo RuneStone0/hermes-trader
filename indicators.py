@@ -54,3 +54,29 @@ def pct_change(values: list[float]) -> list[float | None]:
         if values[i - 1]:
             out[i] = (values[i] - values[i - 1]) / values[i - 1]
     return out
+
+
+def rsi(closes: list[float], period: int = 2) -> list[float | None]:
+    """Wilder RSI. out[i] is None until `period` changes are available.
+
+    Copied deliberately verbatim from the backtester's own implementation
+    (`backtest_mr.py: rsi()`), which is what the mean-reversion sleeve's edge was
+    measured with. A live rule that computes RSI even slightly differently from
+    the backtested one is a DIFFERENT rule with unknown expectancy — the classic
+    way a backtest looks good and the bot then loses. If either copy changes, the
+    other must change with it (tests/test_strategies.py pins them together).
+    """
+    n = len(closes)
+    out: list[float | None] = [None] * n
+    if n <= period:
+        return out
+    gains = [max(closes[i] - closes[i - 1], 0.0) for i in range(1, n)]
+    losses = [max(closes[i - 1] - closes[i], 0.0) for i in range(1, n)]
+    ag = sum(gains[:period]) / period
+    al = sum(losses[:period]) / period
+    out[period] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
+    for i in range(period + 1, n):
+        ag = (ag * (period - 1) + gains[i - 1]) / period
+        al = (al * (period - 1) + losses[i - 1]) / period
+        out[i] = 100.0 if al == 0 else 100.0 - 100.0 / (1.0 + ag / al)
+    return out
