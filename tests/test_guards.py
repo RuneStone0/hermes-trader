@@ -146,12 +146,53 @@ def test_equity_history_roundtrip() -> None:
     check("same-minute write upserts", after == before, f"{before} -> {after}")
 
 
+def test_benchmark_window_is_not_borrowed() -> None:
+    print("benchmark window anchors on the account, never on SPY's longer history")
+    db.init_db()
+    fresh = "__no_trades__"
+    conn = db.connect()
+    try:
+        conn.execute("DELETE FROM trades WHERE account=?", (fresh,))
+        conn.execute("DELETE FROM equity_history WHERE account=?", (fresh,))
+        conn.commit()
+    finally:
+        conn.close()
+    # A real account always has an account_state row (reconcile snapshots it), and
+    # a real deployment always has benchmark closes (reconcile caches SPY daily).
+    db.save_account_state(fresh, equity=10_000.0, cash=10_000.0, last_equity=10_000.0,
+                          starting_equity=10_000.0)
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    today = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    anchor = (_dt.now(_tz.utc) - _td(days=5)).strftime("%Y-%m-%d")
+    long_ago = (_dt.now(_tz.utc) - _td(days=270)).strftime("%Y-%m-%d")
+    # SPY: +27% since long_ago, but only +1.6% since the account's own anchor.
+    db.save_benchmark("SPY", [(long_ago, 600.0), (anchor, 750.0), (today, 762.0)])
+
+    note = guards.benchmark_note(fresh)
+    check("an account with no trades says so, and shows no market comparison",
+          "no trades yet" in note and "SPY" not in note, note)
+
+    # Give it a single equity point dated at the anchor: the SPY window must start
+    # THERE (+1.6%), never at the beginning of the benchmark series (+27%).
+    conn = db.connect()
+    try:
+        conn.execute("INSERT OR REPLACE INTO equity_history (account, ts, equity, cash) "
+                     "VALUES (?,?,?,?)",
+                     (fresh, f"{anchor}T14:00:00+00:00", 10_000.0, 10_000.0))
+        conn.commit()
+    finally:
+        conn.close()
+    note2 = guards.benchmark_note(fresh)
+    check("the window starts at the account's own anchor, not the series start",
+          "+1.60%" in note2 and "+27.00%" not in note2, note2)
+
+
 def main() -> int:
     print(f"config VERSION {config.VERSION}")
     db.init_db()          # every test above reads account_state / equity_history
     for fn in (test_bands, test_size_factor_multiplies, test_fail_open_without_data_sources,
                test_status_shape, test_drawdown_uses_starting_capital_as_the_peak_floor,
-               test_equity_history_roundtrip):
+               test_equity_history_roundtrip, test_benchmark_window_is_not_borrowed):
         fn()
     print()
     if FAILS:

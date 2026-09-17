@@ -215,7 +215,19 @@ def benchmark_note(account: str) -> str:
             return f"account {mine:+.2f}% vs starting capital"
         rows = db.all_trades(account)
         inception = min((t["created_at"] for t in rows), default=None) if rows else None
-        day = (str(inception)[:10] if inception else "") or series[0]["d"]
+        if inception is None:
+            # No trades yet => no trading window. Fall back to the earliest
+            # equity point we have for this account (equity_history starts when
+            # reconcile first snapshotted it), and if even that is missing, say
+            # nothing about the market rather than borrow SPY's return over a
+            # window the account was not open for. Observed live 2026-09-17: an
+            # account with zero trades reported "vs SPY +11.60%" (nine months of
+            # S&P return) beside its own +0.00%.
+            points = db.equity_series(account, days=400)
+            inception = points[0]["ts"] if points else None
+        if inception is None:
+            return f"account {mine:+.2f}% (no trades yet)"
+        day = str(inception)[:10]
         window = [p for p in series if p["d"] >= day] or series
         if len(window) < 2 or not window[0]["close"]:
             return f"account {mine:+.2f}% vs starting capital"

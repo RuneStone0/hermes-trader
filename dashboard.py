@@ -555,22 +555,35 @@ def _bench_series() -> list[dict]:
 
 
 def _bench_return(since_iso: str | None) -> tuple[float, str, str] | None:
-    """SPY's % return since `since_iso` (or since the first recorded close).
+    """SPY's % return since `since_iso`, or None when there is no valid anchor.
 
-    Returns (pct, from_date, to_date) or None when there is not enough data —
-    never a guess. The bots were being judged against ZERO, which flatters a flat
-    tape: the daily bot looked fine at +$9.27 in Sep 2026 while SPY was -0.06%,
-    and the honest question is always "versus just holding the index".
+    Returns (pct, from_date, to_date). Returns None rather than borrowing SPY's
+    return over a window the account was not open for: a trade-less account used
+    to report its own +0.00% next to SPY's nine-month +11.60%, which reads as a
+    catastrophic underperformance that never happened.
     """
     series = _bench_series()
-    if len(series) < 2:
+    if len(series) < 2 or not since_iso:
         return None
-    day = (str(since_iso)[:10] if since_iso else "") or series[0]["d"]
+    day = str(since_iso)[:10]
     window = [p for p in series if p["d"] >= day] or series
     if len(window) < 2 or not window[0]["close"]:
         return None
     pct = (window[-1]["close"] / window[0]["close"] - 1) * 100.0
     return pct, window[0]["d"], window[-1]["d"]
+
+
+def _inception(account: str, trades) -> str | None:
+    """When this account's record begins: its first trade, else its first
+    recorded equity point. None when we genuinely have nothing to anchor on."""
+    first = min((t["created_at"] for t in trades), default=None) if trades else None
+    if first:
+        return first
+    try:
+        points = db.equity_series(account, days=400)
+    except Exception:
+        return None
+    return points[0]["ts"] if points else None
 
 
 def _bench_curve(points, capital: float | None) -> list | None:
@@ -1085,8 +1098,8 @@ def _overview_body() -> str:
     for t in closed_sorted:
         cum += (t["net_pnl"] or 0)
         curve_pts.append((t["exit_time"], cum))
-    inception = min((t["created_at"] for t in closed_sorted), default=None)
-    bench = _bench_return(inception)
+    inceptions = [i for i in (_inception(acc, closed_sorted) for acc in ACCOUNTS) if i]
+    bench = _bench_return(min(inceptions) if inceptions else None)
 
     recent = [t for t in reversed(closed_sorted)
               if _within_hours(t["exit_time"] or t["created_at"], 48)]
@@ -1133,7 +1146,7 @@ def _account_body(account: str) -> str:
     label = _ACCOUNT_LABEL.get(account, _STRATEGY_LABEL.get(_STRATEGY[account], account))
     sa = st.get(account, {})
     capital = _starting_capital(account, st)
-    inception = min((t["created_at"] for t in trades), default=None)
+    inception = _inception(account, trades)
     bench = _bench_return(inception)
 
     return f"""
