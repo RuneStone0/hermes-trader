@@ -10,7 +10,7 @@ services:
     environment:
       TRADER_HOME: /data
       PORT: "43210"
-      LLM_MODEL: ${LLM_MODEL:-deepseek-v4-pro}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-flash}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY in .env}
       ALPACA_DAILY_API_KEY: ${ALPACA_DAILY_API_KEY:?set ALPACA_DAILY_API_KEY in .env}
       ALPACA_DAILY_SECRET_KEY: ${ALPACA_DAILY_SECRET_KEY:?set ALPACA_DAILY_SECRET_KEY in .env}

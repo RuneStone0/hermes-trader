@@ -116,7 +116,12 @@ def _load_env_file() -> dict[str, str]:
 
 _LLM_ENV = _load_env_file()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY") or _LLM_ENV.get("DEEPSEEK_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "deepseek-v4-pro")
+# NOTE: this reads the loaded .env too, not just os.environ. Previously it was
+# os.environ-only, so setting LLM_MODEL in .env silently did nothing — the file
+# was loaded (DEEPSEEK_API_KEY uses it) but this line ignored it, and the stale
+# hardcoded default won. Keep the .env fallback: it is the deployment's knob and
+# the docker-compose path passes the same name as a real env var.
+LLM_MODEL = os.environ.get("LLM_MODEL") or _LLM_ENV.get("LLM_MODEL") or "deepseek-flash"
 LLM_BASE_URL = "https://api.deepseek.com/v1"
 
 # --------------------------------------------------------------------------- #
