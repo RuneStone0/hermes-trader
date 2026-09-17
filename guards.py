@@ -146,9 +146,12 @@ def context(account: str, client=None, symbols: list[str] | None = None,
     try:
         import econ
         if guard.get("enabled", True):
+            # The DIGEST is informational, so it carries medium+high events (a
+            # Fed speaker can move the tape even though it is not worth resizing
+            # for). Only the SIZE CUT is calibrated to high-impact only.
             ctx["economic_calendar"] = econ.brief(
                 days=3, countries=tuple(guard.get("countries", ("US",))),
-                min_importance=guard.get("event_day_importance", 0)) or "no notable US events"
+                min_importance=0) or "no notable US events"
             today = econ.high_impact_today(countries=tuple(guard.get("countries", ("US",))))
             if today:
                 ctx["high_impact_today"] = [f"{e['title']} {e['ts'][11:16]}Z" for e in today[:6]]
@@ -192,6 +195,13 @@ def benchmark_note(account: str) -> str:
 
     Measuring a bot against ZERO is how a flat tape flatters it: in Sep 2026 the
     daily bot looked fine at +$9.27 while SPY was -0.06% — the honest comparison.
+
+    The window MUST start at the account's own inception (its first trade), not
+    at the start of the cached benchmark series: comparing a two-week-old account
+    against SPY's 9-month return reads as "we are losing to the market by 13
+    points" when the market did nothing over the period the account actually
+    traded. Verified live 2026-09-17: the naive version printed SPY +11.55% for
+    an account that had been open twelve sessions (SPY over that window: -0.06%).
     Returns '' when there is not enough data to say anything real.
     """
     try:
@@ -203,12 +213,15 @@ def benchmark_note(account: str) -> str:
         series = db.benchmark_series("SPY", days=400)
         if len(series) < 2:
             return f"account {mine:+.2f}% vs starting capital"
-        first, last = series[0], series[-1]
-        if not first["close"]:
+        rows = db.all_trades(account)
+        inception = min((t["created_at"] for t in rows), default=None) if rows else None
+        day = (str(inception)[:10] if inception else "") or series[0]["d"]
+        window = [p for p in series if p["d"] >= day] or series
+        if len(window) < 2 or not window[0]["close"]:
             return f"account {mine:+.2f}% vs starting capital"
-        spy = (last["close"] / first["close"] - 1) * 100.0
+        spy = (window[-1]["close"] / window[0]["close"] - 1) * 100.0
         return (f"account {mine:+.2f}% since inception vs SPY buy-and-hold "
-                f"{spy:+.2f}% over the same window ({first['d']} to {last['d']})")
+                f"{spy:+.2f}% over the same window ({window[0]['d']} to {window[-1]['d']})")
     except Exception:
         return ""
 
