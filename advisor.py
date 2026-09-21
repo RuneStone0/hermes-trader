@@ -25,6 +25,20 @@ import config
 _RETRY_TIMEOUT = 60
 _RETRY_SLEEP = 2.0
 
+# Output-token budget for the decision call. The configured decision model
+# (deepseek-flash) is a REASONING model: `reasoning_content` is billed against
+# max_tokens BEFORE the JSON answer, so one budget covers both. At the old 2000
+# the chain of thought consumed the whole allowance once the richer context
+# layer shipped, and the answer came back EMPTY — measured live 2026-09-21:
+# 3/3 calls returned finish_reason='length' with 2000/2000 tokens spent on
+# reasoning and 0 chars of content. `_extract_json("")` then fell back to {},
+# `decision` defaulted to 'no_go' and `rationale` to "" — so the bot silently
+# skipped a valid setup and the journal recorded a bare "AI: " (the two
+# mr_rsi2 XLF rows of 2026-09-17 19:33/19:48): a starvation bug wearing the
+# costume of a decision. 8000 leaves room for the reasoning AND the answer
+# (measured: finish_reason='stop', content 176-178 chars, ~10 s).
+_DECISION_MAX_TOKENS = 8000
+
 
 class AdvisorError(Exception):
     pass
@@ -83,7 +97,13 @@ def _extract_json(content: str):
 
 
 def decide(context: dict, model: str | None = None) -> dict:
-    """Return {'decision','rationale','size_multiplier'}."""
+    """Return {'decision','rationale','size_multiplier'}.
+
+    Fail-CLOSED and fail-LOUD: an answer that cannot be read raises
+    AdvisorError (the callers journal an error event and take no trade) rather
+    than coming back as a decision-shaped 'no_go' with an empty reason — an
+    unreadable answer must never look like the bot deciding there was no setup.
+    """
     if not config.DEEPSEEK_API_KEY:
         raise AdvisorError("No DEEPSEEK_API_KEY configured")
 
@@ -102,23 +122,45 @@ def decide(context: dict, model: str | None = None) -> dict:
             {"role": "user", "content": json.dumps(context, indent=2)},
         ],
         "temperature": 0.2,
-        "max_tokens": 2000,
+        "max_tokens": _DECISION_MAX_TOKENS,
     }
     data = _post(body, timeout=90)
 
-    content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
     out = _extract_json(content)
+    if not str(out.get("decision") or "").strip():
+        # Empty, truncated or non-JSON answer (see _DECISION_MAX_TOKENS). Fail
+        # closed, but with the diagnosis attached so the operator can tell a
+        # starved/broken model call from a genuine "no setup today".
+        usage = data.get("usage") or {}
+        tail = " ".join(content.split())[:160]
+        if not tail:
+            tail = " ".join(str(message.get("reasoning_content") or "").split())[-160:]
+        raise AdvisorError(
+            "advisor returned no readable decision "
+            f"(finish_reason={choice.get('finish_reason')}, "
+            f"completion_tokens={usage.get('completion_tokens')}, "
+            f"reasoning_tokens={(usage.get('completion_tokens_details') or {}).get('reasoning_tokens')}, "
+            f"content={len(content)} chars)" + (f"; tail: {tail}" if tail else "")
+        )
 
-    decision = out.get("decision", "no_go")
+    decision = str(out.get("decision")).strip().lower()
     if decision not in ("go", "no_go", "size_down"):
         decision = "no_go"
+    rationale = str(out.get("rationale") or "").strip()
+    if not rationale:
+        # Never journal a blank reason: the decision journal is how a human
+        # checks WHY a bot passed, and "AI: " explains nothing.
+        rationale = "no reason given by the model"
     try:
         size_mult = float(out.get("size_multiplier", 1.0))
     except (TypeError, ValueError):
         size_mult = 1.0
     size_mult = max(0.0, min(1.0, size_mult))
 
-    return {"decision": decision, "rationale": out.get("rationale", ""),
+    return {"decision": decision, "rationale": rationale,
             "size_multiplier": size_mult}
 
 
