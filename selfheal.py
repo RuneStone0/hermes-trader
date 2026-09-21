@@ -15,6 +15,9 @@ Rules (each individually toggled in config.SELFHEAL):
                 legs, prices copied VERBATIM from the trade's stop_price /
                 target_price. If no stop_price is on record -> log error and
                 leave it for the Hermes watchdog (never invent a level).
+                Skipped while the position already carries a live closing
+                *market* order (the exit path's own close is in flight, so the
+                shares are committed and a new stop would be rejected 403).
   R3 debris   — open protective orders (stops/limits) on symbols with NO
                 position and no pending entry order -> cancel (stale bracket
                 siblings that could misfire on a future move).
@@ -48,6 +51,11 @@ OPEN_STATUSES = {
 # An order can only PROTECT a position if a fill would close it (stop/stop_limit
 # on the opposite side). A bare take-profit limit does NOT protect.
 PROTECTIVE_TYPES = {"stop", "stop_limit"}
+# An order that can only CLOSE the position (the bots' exit path releases the
+# protective legs and then submits an unconditional market close). The broker
+# HOLDS the shares against that order until it fills, so while it is live the
+# position is not "naked" — it is being exited.
+CLOSING_TYPES = {"market"}
 # An order that could OPEN a position if filled (pending entry order).
 ENTRY_TYPES = {"market", "limit"}
 # Common ETFs — for the db asset_class label of adopted rows (same set as
@@ -142,6 +150,26 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
             side = _side_of(float(p["qty"]))
             if _has_protection(by_sym.get(sym, []), side):
                 continue  # protected (bracket stop leg live, incl. 'held')
+            # A live order that only CLOSES the position (the exit path released
+            # the legs a second earlier and its market close is still working)
+            # holds every share: re-attaching a stop now is rejected by the
+            # broker (403 40310000 'insufficient qty available' — daily XLF x35
+            # and yolo XLV x1, 2026-09-21, ~30s after their own close orders) and
+            # would fight the intended exit. Same reasoning as R3's pending-entry
+            # guard. If that close dies unfilled, the next tick sees no live
+            # order and re-attaches, so protection is never dropped for long.
+            closing = [o for o in by_sym.get(sym, [])
+                       if o.get("side") == _opposite_side(side)
+                       and o.get("type") in CLOSING_TYPES]
+            if closing:
+                o = closing[0]
+                _log(account, "skip",
+                     f"{sym}: protection left as-is — its exit is already working",
+                     detail=(f"{side} x{qty:g}: live {o.get('type')} "
+                             f"{o.get('side')} order {str(o.get('id', ''))[:8]} "
+                             f"holds all the shares"),
+                     dedup=True)
+                continue
             t = trades.get(sym)
             stop_px = float(t["stop_price"]) if t and t["stop_price"] else None
             if stop_px is None or stop_px <= 0:
