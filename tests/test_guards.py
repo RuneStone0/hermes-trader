@@ -114,6 +114,18 @@ def test_drawdown_uses_starting_capital_as_the_peak_floor() -> None:
 def test_equity_history_roundtrip() -> None:
     print("equity history round-trip")
     db.init_db()
+    # Start from a clean slate for this sentinel account: `equity_peak` reads the
+    # whole stored series while `equity_series(days=1)` reads today, so rows left
+    # by an EARLIER run (or a run on a previous day) make the first check compare
+    # a peak from one window against a max from another — a red test that says
+    # nothing about the code. Same cleanup pattern as
+    # test_benchmark_window_is_not_borrowed below.
+    conn = db.connect()
+    try:
+        conn.execute("DELETE FROM equity_history WHERE account=?", ("__test__",))
+        conn.commit()
+    finally:
+        conn.close()
     db.record_equity("__test__", 10000.0, 10000.0)
     db.record_equity("__test__", 9500.0, 9500.0)
     series = db.equity_series("__test__", days=1)
