@@ -112,6 +112,20 @@ def _log(name: str, text: str) -> None:
         f.write(text)
 
 
+def _txt(x) -> str:
+    """Coerce TimeoutExpired stdout/stderr to str.
+
+    CPython's Popen._check_timeout joins the raw pipe chunks, so even with
+    text=True the captured partial output is BYTES. Concatenating it to the
+    f-string raised TypeError inside the handler, which killed the reporting
+    branch: a timed-out job wrote NOTHING to its own log (2026-09-23: selfheal
+    + reconcile timed out twice, only a bare scheduler traceback survived).
+    """
+    if x is None:
+        return ""
+    return x if isinstance(x, str) else x.decode("utf-8", errors="replace")
+
+
 def run_job(job: dict) -> None:
     name = job["name"]
     t0 = time.time()
@@ -121,7 +135,9 @@ def run_job(job: dict) -> None:
         out = (proc.stdout or "") + (proc.stderr or "")
         rc = proc.returncode
     except subprocess.TimeoutExpired as e:
-        out = f"TIMEOUT after {job.get('timeout', 180)}s\n" + (e.stdout or "") + (e.stderr or "")
+        out = (f"TIMEOUT after {job.get('timeout', 180)}s "
+               f"(partial output captured before the kill)\n"
+               + _txt(e.stdout) + _txt(e.stderr))
         rc = -1
     except Exception:
         out = traceback.format_exc()
