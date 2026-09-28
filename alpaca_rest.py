@@ -226,7 +226,23 @@ class AlpacaClient:
 
     def bars(self, symbol: str, timeframe: str = "1Day", limit: int = 100,
              start: str | None = None, end: str | None = None,
-             adjustment: str = "all") -> list:
+             adjustment: str = "all", feed: str | None = "iex") -> dict:
+        """Bars payload: the raw Alpaca response dict ({"bars": [...], "symbol":...}).
+
+        The annotation said `list` until Sep 2026 while every caller already did
+        `.get("bars", [])` — the type checker believed the annotation and flagged
+        correct code, which is how a wrong annotation turns into noise. It is a
+        dict; the "bars" value is the list.
+
+        `feed="iex"` is passed EXPLICITLY (default here) and that is load-bearing
+        on the free tier: with an explicit `end` reaching today, the default feed
+        resolution falls back to SIP and the request dies with
+        `HTTP 403 "subscription does not permit querying recent SIP data"`, while
+        `feed=iex` returns the same window happily. Verified 2026-09-28: 5Min QQQ
+        2026-09-18..2026-09-28 -> 403 without it, 573 bars with it. The free tier
+        can only ever read IEX, so asking for it cannot reduce entitlement; it
+        only removes the failure mode.
+        """
         # The free IEX data tier returns an empty first page (bars: null) for
         # limit-only requests — back-compute a start date far enough back to
         # cover `limit` bars when neither start nor end is given.
@@ -252,6 +268,8 @@ class AlpacaClient:
             req_limit = limit
 
         params = [f"timeframe={timeframe}", f"limit={req_limit}", f"adjustment={adjustment}"]
+        if feed:
+            params.append(f"feed={feed}")
         if start:
             params.append(f"start={start}")
         if end:

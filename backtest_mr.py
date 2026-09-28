@@ -370,6 +370,56 @@ def build_control_long(beta_bars: list[dict], every: int = 10,
     return sigs
 
 
+def build_control_trend_rs(bars: list[dict], spy_bars: list[dict],
+                           every: int = 10, hold: int = 3,
+                           rs_days: int = 5) -> dict:
+    """BETA CONTROL + the entry gate the proposal queue keeps asking for.
+
+    Identical to `build_control_long` (same universe, stop width, hold, costs)
+    except a long is only taken when BOTH hold:
+      * the symbol is in its own uptrend        -> close > SMA20
+      * it is not losing to the index            -> 5-session return >= SPY's
+                                                    5-session return (RS >= 0)
+    This exists to answer, with numbers, the structural proposal that has been
+    re-written every night for two weeks ('gate YOLO longs on own-instrument
+    trend plus non-negative 5d relative strength when breadth is narrow'). The
+    live YOLO entry is an LLM decision, so there is no rule to replay — but the
+    gate's VALUE on a long-only ETF entry is testable here, on the same surface
+    and the same cost model as the control. Claim the DIFFERENCE, not the level.
+
+    Limitation, stated up front: the gate is applied unconditionally, NOT only in
+    narrow-breadth tapes (that is the version the queue proposes), so this
+    measures the gate's average value rather than its conditional value.
+    """
+    closes = [b["c"] for b in bars]
+    s200 = sma(closes, 200)
+    s20 = sma(closes, 20)
+    a14 = atr(bars, ATR_PERIOD)
+    spy_closes = [b["c"] for b in spy_bars]
+    spy_at = {b["d"]: i for i, b in enumerate(spy_bars)}
+    sigs: dict[int, dict] = {}
+    for i, b in enumerate(bars):
+        if s200[i] is None or s20[i] is None or a14[i] is None:
+            continue
+        if not (closes[i] > s200[i] and i % every == 0):
+            continue
+        if closes[i] <= s20[i]:
+            continue
+        if i < rs_days:
+            continue
+        j = spy_at.get(b["d"])
+        if j is None or j < rs_days:
+            continue
+        sym_r = closes[i] / closes[i - rs_days] - 1.0
+        spy_r = spy_closes[j] / spy_closes[j - rs_days] - 1.0
+        if sym_r < spy_r:
+            continue
+        sigs[i] = {"side": "long",
+                   "stop": closes[i] - MR_STOP_ATR * a14[i],  # type: ignore[operator]
+                   "target": None}
+    return sigs
+
+
 def pullback_live_replay(daily_bars: list[dict], b5: list[dict],
                          cutoff: str = "10:45") -> list[dict]:
     """Replay the weekly bot's VIEW at its observed run time (10:45 ET).
@@ -703,6 +753,10 @@ def main() -> None:
     if args.fetch:
         from alpaca_rest import AlpacaClient
         cache = fetch_live(AlpacaClient("daily"), UNIVERSE + ["SPY"], args.start)
+        # Persist the fetch: without this a --fetch run measures fresh data and
+        # then leaves the stale cache behind for the next run, so two runs a week
+        # apart silently disagree about the window they covered.
+        Path(args.cache).write_text(json.dumps(cache))
     else:
         cache = json.loads(Path(args.cache).read_text())
 
@@ -925,6 +979,29 @@ def main() -> None:
     all_trades["CTRL_long_beta"] = ctrl_trades
     out(f"   CTRL_long_beta: {len(ctrl_trades)} trades (beta benchmark)")
 
+    # 7. THE RECURRING ENTRY GATE, TESTED. The proposal queue has asked for
+    # 'gate longs on own-instrument trend + non-negative 5d RS vs SPY' every
+    # night for two weeks, and each night it was filed as PENDING because the
+    # live YOLO entry (an LLM decision) has no rule to replay and nobody could
+    # say whether the gate is worth anything. It is testable on the control: same
+    # universe, same stop, same costs, same hold, one extra entry condition.
+    gate_trades: list[dict] = []
+    gate_mkt = gate_bars = 0
+    for s in symbols:
+        bars = daily[s]
+        if len(bars) < 220:
+            continue
+        rg = regime_series(bars, *REGIME_PRIMARY)
+        sg = build_control_trend_rs(bars, spy)
+        rr = simulate(bars, "CTRL_trend_rs", s, lambda i, b, sg=sg: sg.get(i),
+                      exit_close_fn=None, max_hold=3, regimes=rg,
+                      mkt_regimes=_align_mkt(bars, spy, spy_chop), allow_short=False)
+        gate_trades += rr["trades"]
+        gate_mkt += rr["bars_in_market"]
+        gate_bars += rr["eligible_bars"]
+    all_trades["CTRL_trend_rs"] = gate_trades
+    out(f"   CTRL_trend_rs: {len(gate_trades)} trades (control + trend/RS gate)")
+
     def s_of(name: str) -> dict:
         if name == "ORB_5min":
             return summarize(results["ORB_5min"]["trades"],
@@ -939,9 +1016,13 @@ def main() -> None:
         if name == "CTRL_long_beta":
             return summarize(ctrl_trades, ctrl_mkt, ctrl_bars,
                              "CTRL_long_beta (19 syms, benchmark)")
+        if name == "CTRL_trend_rs":
+            return summarize(gate_trades, gate_mkt, gate_bars,
+                             "CTRL_trend_rs (19 syms, +gate)")
         return summarize(mr_dip_trades, mr_dip_mkt, mr_dip_bars, f"{name} (19 syms)")
 
-    order = ["ORB_5min", "ORB_daily_PROXY", "PULLBACK_weekly", "MR_rsi2", "MR_atr_dip"]
+    order = ["ORB_5min", "ORB_daily_PROXY", "PULLBACK_weekly", "MR_rsi2", "MR_atr_dip",
+             "CTRL_trend_rs"]
     main_rows = [sum_row(s_of(n), s_of(n)["label"]) for n in order]
     main_rows.append(sum_row(s_of("CTRL_long_beta"), "* " + s_of("CTRL_long_beta")["label"]))
     out("\n=== MAIN RESULTS (R-normalised, full available window per variant) ===")
@@ -1339,6 +1420,40 @@ def main() -> None:
     m("\nRead the losing point: if the mean R of an MR variant crosses the control's under a "
       "plausible (not extreme) slippage assumption, the claimed edge is a cost assumption, "
       "not a finding.\n")
+
+    # ---- 12. the recurring entry gate, tested ------------------------------ #
+    gs = s_of("CTRL_trend_rs")
+    gate_r = [t["r"] for t in gate_trades]
+    wt = welch_t(gate_r, ctrl_r) if (gate_r and ctrl_r) else None
+    bd = bootstrap_diff(gate_r, ctrl_r, args.bootstrap) if (gate_r and ctrl_r) else None
+    m("\n## 12. The recurring entry gate, tested\n")
+    m("The proposal queue has asked, every night for two weeks, to gate long entries on "
+      "'own-instrument trend + non-negative 5d relative strength vs SPY (when breadth is "
+      "narrow)'. The live YOLO entry is an LLM decision, so there is no rule to replay — but "
+      "the gate itself is testable on the beta control, which shares the universe, the 2.5x ATR "
+      "stop, the 3-bar hold and the cost model. `CTRL_trend_rs` is `CTRL_long_beta` plus: "
+      "close > SMA20 **and** 5-session return >= SPY's 5-session return.\n")
+    gate_rows = [sum_row(s_of("CTRL_long_beta"), "CTRL_long_beta (control, no gate)"),
+                 sum_row(gs, "CTRL_trend_rs (control + trend/RS gate)")]
+    m(md_table(MAIN_HEADERS, gate_rows))
+    if bd and wt is not None:
+        m(f"\nControl avgR = **{cs['avg_r']:+.3f}** (n={cs['n']}) vs gated "
+          f"**{gs['avg_r']:+.3f}** (n={gs['n']}); difference "
+          f"**{gs['avg_r'] - cs['avg_r']:+.3f}R** per trade, Welch t = {wt:+.2f}, "
+          f"95% CI of the difference [{bd[0]:+.3f}, {bd[1]:+.3f}] "
+          f"-> **CI {'excludes' if (bd[0] > 0 or bd[1] < 0) else 'straddles'} 0**.\n")
+        verdict = ("the gate adds measurable expectancy on this surface"
+                   if bd[0] > 0 else
+                   "no measurable gain: the gate cuts trade count without improving "
+                   "expectancy, so it is NOT evidence-backed yet")
+        m(f"Verdict: {verdict}. The gate is applied unconditionally here (not only in "
+          f"narrow-breadth tapes), so this is the gate's AVERAGE value, not its conditional "
+          f"value; a conditional version would need a breadth series and is not tested. "
+          f"Gate kept {gs['n']} of the control's {cs['n']} trades "
+          f"({gs['n'] / cs['n']:.1%} of signals), at {gs['pct_bars'] * 100 if gs['pct_bars'] else 0:.1f}% "
+          f"of bars in market vs {cs['pct_bars'] * 100 if cs['pct_bars'] else 0:.1f}%.\n")
+    else:
+        m("\nNot enough trades on one side to test the difference.\n")
 
     tsv = "\n".join([f"{s_of(n)['label']}\tn={s_of(n)['n']}\tavgR={fmt(s_of(n)['avg_r'])}"
                      f"\ttotR={fmt(s_of(n)['total_r'])}" for n in order])

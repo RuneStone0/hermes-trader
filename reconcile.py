@@ -157,6 +157,16 @@ def reconcile_account(account: str) -> None:
         print(f"[{account}] closed {sym} {t['side']} x{qty:g}: "
               f"gross ${gross:.2f} fees ${f:.2f} net ${gross-f:.2f}")
 
+    # Exit-quality telemetry for anything that just closed (MFE/MAE in R +
+    # stop width in ATR). Measurement only — no decision reads it yet beyond the
+    # nightly review, and it never touches an order or a risk knob. Best-effort:
+    # a data failure must not break reconcile.
+    try:
+        import r_telemetry
+        r_telemetry.backfill(account, client=client, verbose=False)
+    except Exception as e:                                   # noqa: BLE001
+        print(f"[{account}] telemetry error: {type(e).__name__}: {e}")
+
 
 def save_benchmark(client: AlpacaClient, symbol: str = "SPY", days: int = 180) -> None:
     """Cache the benchmark's daily closes so account pages can plot buy-and-hold

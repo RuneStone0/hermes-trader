@@ -125,6 +125,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE trades ADD COLUMN unrealized_pl REAL")
     if "close_reason" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN close_reason TEXT")
+    # Exit-quality telemetry (r_telemetry.py). Two of these are MEASURED after
+    # the close (best/worst excursion inside the holding window, in R) and one is
+    # recorded as of the entry (how wide the stop was, in ATR units). They exist
+    # because "stop_out_share ~0.2 with avg_R -0.7" cannot distinguish an exit
+    # rule that gives winners back from entries that never follow through — and
+    # that distinction is what every review cycle kept asking for.
+    for col, decl in (("mfe_r", "REAL"), ("mae_r", "REAL"),
+                      ("stop_atr", "REAL"), ("telemetry_at", "TEXT")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
     st_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account_state)").fetchall()}
     if "cash" not in st_cols:
         conn.execute("ALTER TABLE account_state ADD COLUMN cash REAL")
@@ -177,6 +187,36 @@ def open_trades(account: str | None = None) -> list[sqlite3.Row]:
                 "SELECT * FROM trades WHERE status='open' AND account=? ORDER BY id", (account,)
             ).fetchall()
         return conn.execute("SELECT * FROM trades WHERE status='open' ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def closed_trades_needing_telemetry(account: str | None = None,
+                                    retry_after_hours: float = 6.0,
+                                    force: bool = False) -> list[sqlite3.Row]:
+    """Closed trades whose exit telemetry is missing (r_telemetry.py).
+
+    `telemetry_at` records the last ATTEMPT, not just success, so a row the feed
+    cannot measure (a symbol outside the free 5-min history cap) is not re-probed
+    on every 10-minute reconcile tick — it is retried after `retry_after_hours`.
+    `force=True` ignores both the attempt stamp and the already-filled values.
+    """
+    conn = connect()
+    try:
+        q = "SELECT * FROM trades WHERE status!='open'"
+        p: list = []
+        if not force:
+            q += " AND (mfe_r IS NULL OR stop_atr IS NULL)"
+            if retry_after_hours:
+                cut = (datetime.now(timezone.utc)
+                       - timedelta(hours=float(retry_after_hours))).isoformat()
+                q += " AND (telemetry_at IS NULL OR telemetry_at <= ?)"
+                p.append(cut)
+        if account:
+            q += " AND account=?"
+            p.append(account)
+        q += " ORDER BY id"
+        return conn.execute(q, p).fetchall()
     finally:
         conn.close()
 

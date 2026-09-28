@@ -68,8 +68,67 @@ def _perf_summary() -> dict:
                                       if (t["close_reason"] or "") == "stop") / n, 2)
                                if n else None),
             "risk_state": gov,
+            # Exit-quality telemetry (r_telemetry.py). Without these the review
+            # could only ever say "stop_out_share is low, so maybe the exits leak
+            # or maybe the entries never work" — two different diagnoses with two
+            # different fixes. mfe_ge_1R says how often a trade was ever a full
+            # risk unit to the good; capture says how much of the offered
+            # excursion was actually kept. A HIGH mfe_ge_1R with a negative
+            # total_R is an EXIT defect; a near-zero mfe_ge_1R is an ENTRY
+            # defect. See r_telemetry.py.
+            **_exit_quality(closed),
         }
     return out
+
+
+def _exit_quality(closed: list) -> dict:
+    """MFE/MAE summary for a bucket. Empty fields when telemetry has not been
+    measured yet (r_telemetry is filled by reconcile; pre-Sep-2026 rows have
+    none), so the review can tell 'no exit defect' from 'not measured'."""
+    mfes = [float(t["mfe_r"]) for t in closed
+            if _has_key(t, "mfe_r") and t["mfe_r"] is not None]
+    maes = [float(t["mae_r"]) for t in closed
+            if _has_key(t, "mae_r") and t["mae_r"] is not None]
+    sats = [float(t["stop_atr"]) for t in closed
+            if _has_key(t, "stop_atr") and t["stop_atr"] is not None]
+    if not mfes and not sats:
+        return {"exit_telemetry": "not measured"}
+    # capture is only comparable LIKE FOR LIKE: realized R and offered MFE come
+    # from the same trades or it is meaningless. Restrict both sides to the rows
+    # whose excursion was actually measured.
+    rs_measured = []
+    for t in closed:
+        if not (_has_key(t, "mfe_r") and t["mfe_r"] is not None):
+            continue
+        risk = _risk_dollars(t)
+        if risk and risk > 0 and t["net_pnl"] is not None:
+            rs_measured.append(float(t["net_pnl"]) / risk)
+    avail = sum(x for x in mfes if x > 0)
+    return {
+        "mfe_measured": len(mfes),
+        "median_mfe_R": _median(mfes),
+        "mfe_ge_1R": sum(1 for x in mfes if x >= 1.0),
+        "median_mae_R": _median(maes),
+        "median_stop_atr": _median(sats),
+        "capture": (round(sum(rs_measured) / avail, 3) if avail > 0 else None),
+        "capture_n": len(rs_measured),
+    }
+
+
+def _has_key(t, k: str) -> bool:
+    try:
+        t[k]
+        return True
+    except (KeyError, IndexError):
+        return False
+
+
+def _median(xs: list[float]) -> float | None:
+    if not xs:
+        return None
+    s = sorted(xs)
+    n = len(s)
+    return round(s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2, 3)
 
 
 def _risk_dollars(t) -> float | None:
@@ -112,10 +171,35 @@ def _tuning_gate(clean: dict, perf: dict) -> tuple[bool, str]:
     return True, ""
 
 
-def _tail(path, n: int = 2000) -> str:
+def _tail(path, n: int = 2000, out: bool = False) -> str:
     if not path.exists():
         return ""
-    return path.read_text()[-n:]
+    text = path.read_text()
+    # A settled-findings file is read from the HEAD when it is short enough to fit
+    # whole (the newest verdicts live at the top), else from the tail.
+    return text if out else text[-n:]
+
+
+def review_payload(perf: dict, ctx: dict, knobs: list[dict]) -> dict:
+    """The JSON body handed to the reviewer LLM. Extracted so it is testable.
+
+    `settled_findings` is the loop-breaker: without it the routine re-derives the
+    same handful of proposals from the stale lessons tail every night (observed:
+    the same ATR-stop, sector-RS and config-drift proposals re-filed nightly for
+    two weeks, none of them testable as written).
+    """
+    settled = _tail(config.CLOSED_PROPOSALS_PATH, out=True)
+    if len(settled) > 3000:
+        settled = settled[:3000]
+    return {
+        "performance": perf,
+        "sample_gate_closed_trades": config.MIN_CLOSED_TRADES_TO_TUNE,
+        "market_context": ctx,
+        "existing_lessons": _tail(config.LESSONS_PATH),
+        "existing_proposals": _tail(config.PROPOSALS_PATH),
+        "settled_findings": settled,
+        "tunable_knobs": knobs,
+    }
 
 
 def _market_context() -> dict:
@@ -202,18 +286,18 @@ def main() -> None:
         "explained by the REGIME (market_context below) than by the rule. Being "
         "stopped out repeatedly in a chop regime is a regime mismatch, not proof "
         "the entry rule is wrong.\n"
+        " * settled_findings lists questions that are ALREADY ANSWERED, each with "
+        "the measurement that settled it. Do NOT re-propose anything in it. You may "
+        "re-open one ONLY if you can name the new data that contradicts its verdict "
+        "— and say which measurement you are overturning. Re-filing a settled item "
+        "unchanged wastes the review and is treated as a failed cycle.\n"
+        " * Every proposal must state, in its rationale, the measurement that would "
+        "prove it wrong (falsifier). A proposal without a falsifier is not accepted.\n"
         "Respond with ONLY a JSON object (no markdown):\n"
         '{"lessons":[{"topic":"...","detail":"..."}],'
         '"proposals":[{"title":"...","rationale":"...","params":{...}}]}'
     )
-    user = json.dumps({
-        "performance": perf,
-        "sample_gate_closed_trades": config.MIN_CLOSED_TRADES_TO_TUNE,
-        "market_context": ctx,
-        "existing_lessons": _tail(config.LESSONS_PATH),
-        "existing_proposals": _tail(config.PROPOSALS_PATH),
-        "tunable_knobs": knobs,
-    }, indent=2)
+    user = json.dumps(review_payload(perf, ctx, knobs), indent=2)
 
     try:
         content = advisor.chat(system, user, temperature=0.3, max_tokens=4000)

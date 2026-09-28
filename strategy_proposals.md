@@ -90,3 +90,45 @@ answerable. **Watch instead:** whether the trades with a sane stop distance
 (≥1×ATR(14)) ever reach +1R.
 
 <!-- proposals below -->
+
+
+## 2026-09-28 12:20 UTC — WEEKLY REVIEW DISPOSITION (measured, not re-argued)
+
+Five items in this queue are now ANSWERED. They are recorded in
+`strategy_proposals_closed.md` (delivered to the nightly routine as
+`settled_findings`, with an instruction not to re-file them):
+
+1. **"Noise-tight stops / low-vol guard"** — FIXED, and visible in the data: stop
+   distance in ATR was 0.14–0.80 for trades opened 2026-09-08..10 and is 1.1–3.0
+   for everything opened since 2026-09-14 (the 2026-09-17 live-price bracket-geometry
+   fix). The four sub-0.6-ATR stops are exactly the trades whose MFE exceeded +1R and
+   still closed red (GLD +1.087R MFE → −1.07R; XLU +2.052R MFE → −1.04R).
+2. **"Gate longs on own-trend + 5d RS vs SPY"** — TESTED AND NOT SUPPORTED.
+   `backtest_mr.py` §12, fresh bars to 2026-09-25: control avgR +0.036 (n=2445) vs
+   gated +0.038 (n=1016); difference +0.002R, Welch t = +0.10, 95% CI
+   [−0.035, +0.040]. The gate discards 58% of trades for the same per-trade
+   expectancy (it does cut max drawdown 31.1 → 24.4 R: an exposure choice, not an
+   edge). Only the unconditional version was tested; a narrow-breadth-conditional
+   version needs a breadth series and has not been run.
+3. **"Config drift: live knobs vs floors"** — NOT DRIFT. `config.YOLO_TUNE` bounds
+   are (0.05, 0.9) / (0.01, 0.1) / (1, 10): those are the tuner's ALLOWED LIMITS,
+   not a floor the bot sits at. Live 0.25 / 0.02 / 4.0 sit at no bound. Stop citing
+   the lessons tail for sizing state; cite the config.
+4. **"No entries into HIGH-impact event windows"** — already implemented
+   (`EVENT_GUARD enabled, blackout_min 30, event_day_size_cut 0.5,
+   block_overnight_into_fomc`) and wired into every entry path via
+   `guards.entry_gate/size_factor/fomc_block_new_overnight`; observed working on
+   2026-09-23 (entry cut to 50% and journaled as an event day).
+5. **"30-trade gate"** — already mechanical (`MIN_CLOSED_TRADES_TO_TUNE = 30` plus
+   `self_improve._tuning_gate`). Not a proposal.
+
+The −1.74R tail is also attributed: SLV (24 sh, entry 61.0000, stop 59.47012, exit
+58.3392) measured MFE +0.451R / MAE −1.902R — it was carried overnight and the next
+session opened through a 0.802-ATR stop. Gap through a noise-tight stop, not an
+execution defect; the resting stop did what a resting stop can do.
+
+What is NOT answered, and is the live open question: YOLO's entry quality. Median
+MFE is +0.263R, 4 of 13 trades never traded above their entry at all (MFE ≤ 0), and
+only 3 of 13 ever reached +1R. That is selection, not exit management — and the
+sector-RS gate proposed to fix it is the one just tested as unsupported in its
+unconditional form.

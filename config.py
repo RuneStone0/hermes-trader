@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 # App version (bumped manually on releases; shown in the dashboard footer).
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
@@ -29,6 +29,11 @@ DB_PATH = DATA_DIR / "trades.db"
 DASHBOARD_PATH = TRADING_DIR / "dashboard" / "index.html"
 LESSONS_PATH = TRADING_DIR / "lessons_learned.md"
 PROPOSALS_PATH = TRADING_DIR / "strategy_proposals.md"
+# Settled findings: proposals that have been TESTED or IMPLEMENTED. The nightly
+# routine is given this file so it stops re-deriving the same five ideas from the
+# stale lessons tail (it re-filed the same ATR-stop / sector-RS / config-drift
+# proposals every night for two weeks before this existed).
+CLOSED_PROPOSALS_PATH = TRADING_DIR / "strategy_proposals_closed.md"
 # Runtime knob overrides written by the self-improvement routine (and read back
 # at import). A human may also edit this file directly — it wins over source.
 OVERRIDES_PATH = STATE_DIR / "strategy_overrides.json"
