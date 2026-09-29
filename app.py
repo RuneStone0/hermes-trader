@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -39,6 +40,13 @@ JOBS = [
      "market_gate": True, "cmd": [sys.executable, "yolo_run.py"], "timeout": 300},
     {"name": "self_improve", "type": "times", "times": ["21:30"],
      "cmd": [sys.executable, "self_improve.py"], "timeout": 300},
+    # The X-copy follower (x_copy_run.py). Deliberately NOT gated on the market
+    # clock or on weekdays: the whole point is to see his post the moment it
+    # appears, which can be any hour of any day. An entry that arrives while the
+    # market is shut waits for the open inside the bot itself, so nothing is
+    # chased at a bad price just because the poller is always awake.
+    {"name": "x_feed", "type": "interval", "interval_s": 600,
+     "cmd": [sys.executable, "x_copy_run.py"], "timeout": 240},
     # Mean-reversion sleeve on the daily account (mr_run.py). Its entries are
     # close-based, so most ticks only manage exits — the job is cheap and the
     # 15-min cadence keeps the rule exit responsive.
@@ -168,12 +176,69 @@ def _health() -> dict:
         n_closed = len(db.all_trades()) - n_open
     except Exception as e:
         return {"status": "degraded", "error": str(e)}
-    return {
+    health = {
         "status": "ok",
         "uptime_s": int(time.time() - START),
         "open_positions": n_open,
         "closed_trades": n_closed,
         "server_time": _now_utc().isoformat(timespec="seconds"),
+    }
+    # Feed liveness for the copy follower. Additive on purpose: the existing
+    # watchdog reads `status`, and a bot that cannot see its source is exactly
+    # the kind of quiet failure that deserves to be visible here.
+    try:
+        posts = db.x_posts(limit=1)
+        health["x_feed"] = {
+            "handle": config.X_FEED["handle"],
+            "last_post_at": posts[0]["posted_at"] if posts else None,
+            "posts_stored": len(db.x_posts(limit=1000)),
+            "last_poll": db.feed_state_get("last_poll"),
+            "last_sweep": db.feed_state_get("last_sweep"),
+            "last_error": db.feed_state_get("last_error"),
+            "last_error_at": db.feed_state_get("last_error_at"),
+            "account_live": config.copy_account_configured(),
+        }
+    except Exception as e:                                         # noqa: BLE001
+        health["x_feed"] = {"error": str(e)}
+    return health
+
+
+def _signals(limit: int = 25) -> dict:
+    """Recent posts by the followed account + what the bot did about them.
+
+    Read-only, and the same records the dashboard renders: this exists so the
+    Hermes-side watcher can report a new post (and what the bot did with it)
+    without scraping HTML.
+    """
+    try:
+        db.init_db()
+        rows = db.x_posts(limit=int(limit))
+    except Exception as e:                                         # noqa: BLE001
+        return {"error": str(e), "posts": []}
+    return {
+        "handle": config.X_FEED["handle"],
+        "generated_at": _now_utc().isoformat(timespec="seconds"),
+        # One nested block, the same keys /health exposes, so the two consumers
+        # (the SSH watchdog and the post watcher) can never drift apart.
+        "feed": {
+            "last_poll": db.feed_state_get("last_poll"),
+            "last_sweep": db.feed_state_get("last_sweep"),
+            "last_error": db.feed_state_get("last_error"),
+            "last_error_at": db.feed_state_get("last_error_at"),
+            "account_live": config.copy_account_configured(),
+        },
+        "posts": [{
+            "post_id": r["post_id"],
+            "posted_at": r["posted_at"],
+            "url": r["url"],
+            "text": r["text"],
+            "state": r["state"],
+            "kind": r["kind"],
+            "symbol": r["symbol"],
+            "side": r["side"],
+            "confidence": r["confidence"],
+            "reason": r["reason"],
+        } for r in rows],
     }
 
 
@@ -186,13 +251,21 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        if self.path.startswith("/health"):
             self._send(200, "application/json", json.dumps(_health()).encode())
+            return
+        if self.path.startswith("/signals"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                limit = max(1, min(int(q.get("limit", ["25"])[0]), 200))
+            except (TypeError, ValueError):
+                limit = 25
+            self._send(200, "application/json", json.dumps(_signals(limit)).encode())
             return
         try:
             import dashboard
-            account = self.path.strip("/")
-            if account in ("daily", "weekly", "yolo"):
+            account = self.path.strip("/").split("?")[0]
+            if account in ("daily", "weekly", "yolo", "copy"):
                 html = dashboard.build_account(account).encode()
             else:
                 html = dashboard.build().encode()

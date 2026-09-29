@@ -89,6 +89,54 @@ CREATE TABLE IF NOT EXISTS benchmark_history (
     close REAL,
     PRIMARY KEY (symbol, d)
 );
+
+-- Every ORIGINAL post seen from a followed X account (x_copy_run.py), plus what
+-- the bot made of it. This table is the monitoring feed the user asked for: it
+-- is the record of "he posted X at T, and here is what the bot did about it".
+--
+-- post_id is the PRIMARY KEY because that is the only genuinely stable
+-- identity: the feed re-reads a trailing window on every poll and every
+-- provider returns the same numeric id, so a re-read is an upsert (no duplicate
+-- signal) and a late-arriving post is still caught.
+CREATE TABLE IF NOT EXISTS x_posts (
+    post_id TEXT PRIMARY KEY,         -- numeric X post id, as a string
+    author TEXT NOT NULL,             -- handle without '@'
+    url TEXT,
+    posted_at TEXT,                   -- when HE published it (ISO8601 UTC)
+    text TEXT,
+    is_reply INTEGER NOT NULL DEFAULT 0,
+    has_media INTEGER NOT NULL DEFAULT 0,
+    source TEXT,                      -- which feed provider returned it
+    seen_at TEXT NOT NULL,            -- when WE first stored it
+    state TEXT NOT NULL DEFAULT 'new',
+        -- new       : stored, not yet read by the LLM
+        -- ignored   : read; not a trade signal (commentary / poll / P&L post)
+        -- review    : read; looks like a signal but we cannot act on it safely
+        --             (no symbol, media-only, unverifiable ticker)
+        -- open      : actionable ENTRY, waiting to execute (queued to the open)
+        -- exit      : actionable EXIT for a symbol we hold
+        -- done      : executed (or shadowed)
+        -- rejected  : passed by the risk floor / gates
+    kind TEXT,                        -- open | add | close | trim | none | unknown
+    symbol TEXT,
+    side TEXT,
+    confidence REAL,
+    reason TEXT,                      -- human-readable disposition, shown as-is
+    analysis_json TEXT,               -- the full LLM read, for the audit trail
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_x_posts_posted ON x_posts(posted_at);
+
+-- Small key/value store for feed bookkeeping (when the last gap-sweep ran, what
+-- the last feed error was). A table of its own because these are facts about the
+-- FEED, not about a post or an account, and inventing them from other tables
+-- would be guesswork.
+CREATE TABLE IF NOT EXISTS feed_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_x_posts_state ON x_posts(state);
 """
 
 
@@ -135,6 +183,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
                       ("stop_atr", "REAL"), ("telemetry_at", "TEXT")):
         if col not in cols:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+    # Which X post caused this trade (x_copy_run.py). Null for the other bots.
+    # A column rather than a decision_json key so the dashboard and the feed view
+    # can join a position back to the post that opened it in one query.
+    if "signal_post_id" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN signal_post_id TEXT")
     st_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account_state)").fetchall()}
     if "cash" not in st_cols:
         conn.execute("ALTER TABLE account_state ADD COLUMN cash REAL")
@@ -452,6 +505,134 @@ def benchmark_series(symbol: str, days: int = 120) -> list[dict]:
     try:
         return [dict(r) for r in conn.execute(
             "SELECT d, close FROM benchmark_history WHERE symbol=? AND d>=? ORDER BY d",
-            (symbol, since))]
+            (symbol, since)).fetchall()]
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# X posts — the followed account's feed (x_copy_run.py)
+# --------------------------------------------------------------------------- #
+def upsert_x_post(post_id: str, author: str, url: str = "", posted_at: str = "",
+                  text: str = "", is_reply: int = 0, has_media: int = 0,
+                  source: str = "") -> bool:
+    """Store a post we may not have seen before. Returns True if it is NEW.
+
+    Idempotent by post_id: the feed deliberately re-reads a trailing window on
+    every poll (so a post that only reaches the search index minutes later is
+    still caught), which means the same post arrives over and over. A re-read
+    must never look like a new signal, and it must never overwrite the
+    disposition the bot already recorded for that post.
+    """
+    conn = connect()
+    try:
+        row = conn.execute("SELECT post_id FROM x_posts WHERE post_id=?",
+                           (str(post_id),)).fetchone()
+        if row:
+            # Refresh only the immutable facts (a provider may fill in a blank
+            # text or a media flag on a later pass); never touch state/analysis.
+            conn.execute(
+                "UPDATE x_posts SET posted_at=COALESCE(NULLIF(?,''), posted_at), "
+                "text=CASE WHEN COALESCE(?,'')<>'' THEN ? ELSE text END, "
+                "url=COALESCE(NULLIF(?,''), url), "
+                "has_media=MAX(has_media, ?), is_reply=?, updated_at=? "
+                "WHERE post_id=?",
+                (posted_at, text, text, url, int(has_media), int(is_reply), _now(),
+                 str(post_id)))
+            conn.commit()
+            return False
+        conn.execute(
+            "INSERT INTO x_posts (post_id, author, url, posted_at, text, is_reply, "
+            "has_media, source, seen_at, state, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,'new',?)",
+            (str(post_id), author, url, posted_at, text, int(is_reply),
+             int(has_media), source, _now(), _now()))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def set_x_post(post_id: str, **fields) -> None:
+    """Update a post's disposition (state/kind/symbol/reason/analysis_json)."""
+    if not fields:
+        return
+    fields["updated_at"] = _now()
+    sets = ", ".join(f"{k}=?" for k in fields)
+    conn = connect()
+    try:
+        conn.execute(f"UPDATE x_posts SET {sets} WHERE post_id=?",
+                     [*fields.values(), str(post_id)])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def x_post(post_id: str):
+    conn = connect()
+    try:
+        return conn.execute("SELECT * FROM x_posts WHERE post_id=?",
+                            (str(post_id),)).fetchone()
+    finally:
+        conn.close()
+
+
+def x_posts(limit: int = 50, states: tuple | None = None) -> list:
+    """Posts, newest first. `states` filters the disposition."""
+    conn = connect()
+    try:
+        q = "SELECT * FROM x_posts"
+        p: list = []
+        if states:
+            q += f" WHERE state IN ({','.join('?' * len(states))})"
+            p.extend(states)
+        q += " ORDER BY COALESCE(posted_at,'') DESC, post_id DESC LIMIT ?"
+        p.append(int(limit))
+        return conn.execute(q, p).fetchall()
+    finally:
+        conn.close()
+
+
+def x_posts_newest_id() -> str | None:
+    """The highest post id we have stored (post ids are monotonic)."""
+    conn = connect()
+    try:
+        r = conn.execute("SELECT MAX(CAST(post_id AS INTEGER)) AS m FROM x_posts").fetchone()
+        return str(r["m"]) if r and r["m"] is not None else None
+    finally:
+        conn.close()
+
+
+def x_posts_last_seen() -> str | None:
+    """Timestamp of the newest stored post (its publication time)."""
+    conn = connect()
+    try:
+        r = conn.execute("SELECT MAX(posted_at) AS m FROM x_posts").fetchone()
+        return r["m"] if r and r["m"] else None
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Feed bookkeeping (when the last gap-sweep ran, last error, ...)
+# --------------------------------------------------------------------------- #
+def feed_state_get(key: str, default: str | None = None) -> str | None:
+    conn = connect()
+    try:
+        r = conn.execute("SELECT value FROM feed_state WHERE key=?", (str(key),)).fetchone()
+        return r["value"] if r else default
+    finally:
+        conn.close()
+
+
+def feed_state_set(key: str, value: str) -> None:
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO feed_state (key, value, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "updated_at=excluded.updated_at",
+            (str(key), str(value), _now()))
+        conn.commit()
     finally:
         conn.close()

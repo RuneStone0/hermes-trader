@@ -7,12 +7,17 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-LABELS = {"daily": "Daily ORB", "weekly": "Weekly pullback", "yolo": "YOLO"}
+LABELS = {"daily": "Daily ORB", "weekly": "Weekly pullback", "yolo": "YOLO",
+          "copy": "X copy"}
 
 SCHEDULES = {
     "daily":  {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 300},
     "weekly": {"kind": "times", "times": ["14:45"]},
     "yolo":   {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 1800},
+    # The copy follower is NOT market-gated: his posts arrive at any hour on any
+    # day, and seeing one late is the failure that costs a trade. Entries that
+    # land outside RTH wait for the open inside the bot.
+    "copy":   {"kind": "interval", "interval_s": 600},
 }
 
 

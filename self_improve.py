@@ -25,7 +25,7 @@ import advisor
 import config
 import db
 
-ACCOUNTS = ("daily", "weekly", "yolo")
+ACCOUNTS = ("daily", "weekly", "yolo", "copy")
 
 
 def _now() -> str:
@@ -144,7 +144,8 @@ def _risk_dollars(t) -> float | None:
 
 # Knob section -> the performance bucket whose sample size gates it. Global
 # knobs (RISK_PCT_PER_TRADE / MIN_NET_RR) are gated on the TOTAL across buckets.
-_SECTION_BUCKET = {"": "__total__", "DAILY": "daily", "WEEKLY": "weekly", "YOLO": "yolo"}
+_SECTION_BUCKET = {"": "__total__", "DAILY": "daily", "WEEKLY": "weekly", "YOLO": "yolo",
+                   "COPY": "copy"}
 
 
 def _tuning_gate(clean: dict, perf: dict) -> tuple[bool, str]:

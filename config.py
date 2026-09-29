@@ -52,7 +52,8 @@ def _load_keys() -> dict[str, str]:
     # inject secrets as env vars instead of mounting a key file.
     for name in ("ALPACA_DAILY_API_KEY", "ALPACA_DAILY_SECRET_KEY",
                  "ALPACA_WEEKLY_API_KEY", "ALPACA_WEEKLY_SECRET_KEY",
-                 "ALPACA_YOLO_API_KEY", "ALPACA_YOLO_SECRET_KEY"):
+                 "ALPACA_YOLO_API_KEY", "ALPACA_YOLO_SECRET_KEY",
+                 "ALPACA_COPY_API_KEY", "ALPACA_COPY_SECRET_KEY"):
         if os.environ.get(name):
             keys[name] = os.environ[name]
     return keys
@@ -82,6 +83,20 @@ ACCOUNTS = {
         "secret_key": _KEYS.get("ALPACA_YOLO_SECRET_KEY", ""),
         "paper": True,
     },
+    # The X-signal follower: mirrors the positions posted by a public X account
+    # (default @fullportnik). It gets its OWN paper account so its P/L, risk
+    # governor and dashboard page stay isolated — the one-account-per-bot rule.
+    # While the keys are blank the bot runs in SHADOW mode: it detects and
+    # analyses every post and journals the exact order it WOULD place (sizing it
+    # with real levels off the live tape) but never submits one. Filling in
+    # ALPACA_COPY_API_KEY / _SECRET_KEY flips it to real paper execution with no
+    # other change. See x_copy_run.py and config.COPY.
+    "copy": {
+        "base_url": _KEYS.get("ALPACA_COPY_BASE_URL", "https://paper-api.alpaca.markets/v2"),
+        "api_key": _KEYS.get("ALPACA_COPY_API_KEY", ""),
+        "secret_key": _KEYS.get("ALPACA_COPY_SECRET_KEY", ""),
+        "paper": True,
+    },
 }
 
 # Market Data API host (bars/quotes/trades/news). Same host for paper & live;
@@ -91,7 +106,20 @@ DATA_BASE_URL = "https://data.alpaca.markets"
 # Starting capital per paper account — the baseline for the Net P/L % return
 # (realized net P/L ÷ starting capital). Seeded once into account_state by
 # reconcile and never overwritten, so it stays a true lifetime baseline.
-STARTING_CAPITAL = {"daily": 10000.0, "weekly": 10000.0, "yolo": 10000.0}
+STARTING_CAPITAL = {"daily": 10000.0, "weekly": 10000.0, "yolo": 10000.0,
+                    "copy": 10000.0}
+
+
+def copy_account_configured() -> bool:
+    """True once a dedicated paper account exists for the X-copy bot.
+
+    Until then the bot is a SHADOW follower: it still detects every post and
+    writes the full decision to the journal, but it never submits an order (a
+    missing key would otherwise raise inside AlpacaClient and look like a fault
+    every ten minutes).
+    """
+    a = ACCOUNTS.get("copy") or {}
+    return bool(a.get("api_key")) and bool(a.get("secret_key"))
 
 # --------------------------------------------------------------------------- #
 # Tradable universe (IRREDUCIBLE floor — never disabled by an override)
@@ -128,6 +156,15 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY") or _LLM_ENV.get("DEEPSEEK_
 # the docker-compose path passes the same name as a real env var.
 LLM_MODEL = os.environ.get("LLM_MODEL") or _LLM_ENV.get("LLM_MODEL") or "deepseek-flash"
 LLM_BASE_URL = "https://api.deepseek.com/v1"
+
+# xAI key — powers the X post feed (xfeed.py) via the Responses API's built-in
+# `x_search` tool. This is the ONLY way the system reads X: the official X API
+# needs a paid developer app, and every credential-free mirror (nitter and
+# friends) is either dead or behind an unsolvable bot wall — verified
+# 2026-09-29 across nine instances. If X_BEARER_TOKEN is ever set, xfeed prefers
+# the official X API v2 and uses xAI only as the fallback.
+XAI_API_KEY = os.environ.get("XAI_API_KEY") or _LLM_ENV.get("XAI_API_KEY", "")
+X_BEARER_TOKEN = os.environ.get("X_BEARER_TOKEN") or _LLM_ENV.get("X_BEARER_TOKEN", "")
 
 # --------------------------------------------------------------------------- #
 # Global risk parameters
@@ -317,6 +354,89 @@ YOLO_TUNE = {
 }
 
 # --------------------------------------------------------------------------- #
+# X-copy follower — mirrors positions posted by an X account (x_copy_run.py)
+# --------------------------------------------------------------------------- #
+# WHAT THIS BOT IS: the user follows a public trader on X who posts his positions
+# ("full port" single-name bets). This bot watches that account's ORIGINAL posts
+# (replies are ignored — he replies constantly and they are conversation, not
+# signals), reads each one with the LLM, and mirrors the actionable ones.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: mirror his SIZE. He goes all-in on one name;
+# copying that at face value would put the whole account in one gap risk. The bot
+# mirrors the SYMBOL, the DIRECTION and the INTENT, and sizes the position with
+# this system's own risk rules — exactly the way the other three bots size.
+#
+# THE IRREDUCIBLE FLOOR APPLIES HERE TOO: retail-accessible US equity/ETF only,
+# no crypto except BTC, and EVERY position carries a stop-loss. If his post has
+# no stop, the bot derives one from the symbol's own volatility (ATR) rather than
+# copying an unbounded downside; that derived stop is journalled as such.
+COPY = {
+    # --- irreducible floor (pinned in _apply_overrides, never tunable) ------- #
+    "require_stop_loss": True,
+    "allowed_assets": ALLOWED_ASSETS,
+    "crypto_allowlist": CRYPTO_ALLOWLIST,
+    # --- sizing (suggestions, tunable) -------------------------------------- #
+    "max_position_pct": 0.25,   # max notional per mirrored position, % of equity
+    "max_risk_pct": 0.01,       # max $ risk (entry->stop x qty) per position
+    "max_concurrent_positions": 3,
+    # --- stop / target derivation when the post does not state them ---------- #
+    # A stop narrower than ~1x ATR sits inside ordinary noise. These are in ATR
+    # units, so they adapt to each symbol's own volatility.
+    "atr_stop_mult": 2.0,
+    "atr_target_mult": 4.0,
+    # --- execution geometry (same 422 protection as the other bots) --------- #
+    "min_stop_dist_pct": 0.005,
+    "min_target_dist_pct": 0.005,
+    "time_in_force": "gtc",     # GTC brackets: an overnight hold stays protected
+    # --- signal handling ---------------------------------------------------- #
+    "follow_exits": True,       # close the mirrored position when he posts an exit
+    "max_signal_age_min": 720,  # ignore an actionable signal older than this (12h)
+    # A stop does not protect an earnings gap and this bot holds overnight, so a
+    # single name reporting inside the window is refused (ETFs never report).
+    "block_earnings_within_days": 1,
+    # Below this the LLM's read of a post is treated as noise, not a signal.
+    "min_confidence": 0.5,
+}
+COPY_TUNE = {
+    "max_position_pct": (0.05, 0.5),
+    "max_risk_pct": (0.002, 0.03),
+    "max_concurrent_positions": (1, 5),
+    "atr_stop_mult": (1.0, 4.0),
+    "atr_target_mult": (2.0, 8.0),
+    "min_confidence": (0.3, 0.9),
+}
+
+# --------------------------------------------------------------------------- #
+# X post feed (xfeed.py) — how the follower learns about new posts
+# --------------------------------------------------------------------------- #
+X_FEED = {
+    "handle": "fullportnik",
+    "include_replies": False,
+    # Providers are tried in order; the first that returns a usable answer wins.
+    # x_api needs X_BEARER_TOKEN (official, exact, complete). xai needs XAI_API_KEY
+    # and reads X's own index through the Responses API's x_search tool.
+    "providers": ("x_api", "xai"),
+    "xai_base_url": "https://api.x.ai/v1",
+    "xai_model": "grok-4-fast",
+    "xapi_base_url": "https://api.x.com/2",
+    # The xAI provider never enumerates ("the last N posts" repeatedly returned
+    # only 2-6 of the same 6 real posts). It asks one narrow question per post and
+    # walks the timeline backwards until it reaches a post we already hold, so a
+    # quiet poll costs ONE call and the newest post is never missed.
+    "poll_interval_s": 600,     # 10 min: latency on a live signal, day and night
+    "max_walk": 8,              # max backward steps per poll (2-3 is typical)
+    "sweep_depth": 30,          # posts re-walked by the periodic sweep
+    "sweep_interval_h": 6,      # the insurance scan against index lag / downtime
+    "lookback_days": 4,         # ignore anything older than this entirely
+    "max_posts": 25,            # cap for the official API path
+    "timeout_s": 120,
+    # A model answer that did NOT call the search tool is a FEED FAILURE, not
+    # "no new posts". Without this the bot cannot distinguish "checked, nothing
+    # there" from "could not check", and the second one silently eats signals.
+    "require_tool_use": True,
+}
+
+# --------------------------------------------------------------------------- #
 # Risk governor (DETERMINISTIC — reducing-only, and deliberately NOT tunable)
 # --------------------------------------------------------------------------- #
 # Replaces flinch-based de-risking: instead of shrinking size every time the
@@ -419,6 +539,7 @@ __TUNE__: dict[str, dict] = {
     "WEEKLY": WEEKLY_TUNE,
     "YOLO": YOLO_TUNE,
     "MR": MR_TUNE,
+    "COPY": COPY_TUNE,
 }
 _IRREDUCIBLE = {"require_stop_loss", "allowed_assets", "crypto_allowlist",
                 "min_stop_dist_pct", "min_target_dist_pct", "symbol"}
@@ -448,7 +569,7 @@ def _apply_overrides() -> None:
     # --- global scalars (assign into this module's global namespace) ---
     g = globals()
     for key, bounds in __TUNE__.items():
-        if key in ("DAILY", "WEEKLY", "YOLO") or key not in raw:
+        if key in ("DAILY", "WEEKLY", "YOLO", "MR", "COPY") or key not in raw:
             continue
         lo, hi = bounds
         try:
@@ -458,12 +579,14 @@ def _apply_overrides() -> None:
 
     # --- strategy dicts ---
     for section, bound_map in (("DAILY", DAILY_TUNE), ("WEEKLY", WEEKLY_TUNE),
-                               ("YOLO", YOLO_TUNE), ("MR", MR_TUNE)):
+                               ("YOLO", YOLO_TUNE), ("MR", MR_TUNE),
+                               ("COPY", COPY_TUNE)):
         section_tune = __TUNE__.get(section, {})
         over = raw.get(section)
         if not isinstance(over, dict):
             continue
-        target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR}[section]
+        target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR,
+                  "COPY": COPY}[section]
         for key, val in over.items():
             if key in _IRREDUCIBLE or key not in section_tune:
                 continue  # never touch the floor or an unknown knob
@@ -482,6 +605,9 @@ def _apply_overrides() -> None:
     YOLO["require_stop_loss"] = True
     YOLO["allowed_assets"] = ALLOWED_ASSETS
     YOLO["crypto_allowlist"] = CRYPTO_ALLOWLIST
+    COPY["require_stop_loss"] = True
+    COPY["allowed_assets"] = ALLOWED_ASSETS
+    COPY["crypto_allowlist"] = CRYPTO_ALLOWLIST
 
 
 # Apply runtime overrides when this module is imported.
@@ -502,7 +628,8 @@ def tunable_knobs() -> list[dict]:
             ("DAILY", DAILY, DAILY_TUNE),
             ("WEEKLY", WEEKLY, WEEKLY_TUNE),
             ("YOLO", YOLO, YOLO_TUNE),
-            ("MR", MR, MR_TUNE)):
+            ("MR", MR, MR_TUNE),
+            ("COPY", COPY, COPY_TUNE)):
         for key, bounds in tune.items():
             if bounds is None:
                 continue
@@ -539,7 +666,8 @@ def _flat_knob(key: str):
             ("DAILY", DAILY, DAILY_TUNE),
             ("WEEKLY", WEEKLY, WEEKLY_TUNE),
             ("YOLO", YOLO, YOLO_TUNE),
-            ("MR", MR, MR_TUNE)):
+            ("MR", MR, MR_TUNE),
+            ("COPY", COPY, COPY_TUNE)):
         if key in tune:
             bounds = tune[key]
             if bounds is None:
@@ -560,11 +688,12 @@ def _tokenize(candidate: dict) -> dict:
     for key, val in candidate.items():
         if isinstance(val, dict):  # <SECTION>: {...}
             sec = key.upper()
-            if sec not in ("DAILY", "WEEKLY", "YOLO", "MR"):
+            if sec not in ("DAILY", "WEEKLY", "YOLO", "MR", "COPY"):
                 continue
-            target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR}[sec]
+            target = {"DAILY": DAILY, "WEEKLY": WEEKLY, "YOLO": YOLO, "MR": MR,
+                      "COPY": COPY}[sec]
             tune = {"DAILY": DAILY_TUNE, "WEEKLY": WEEKLY_TUNE, "YOLO": YOLO_TUNE,
-                    "MR": MR_TUNE}[sec]
+                    "MR": MR_TUNE, "COPY": COPY_TUNE}[sec]
             for k, v in val.items():
                 if k in _IRREDUCIBLE or k not in tune or tune[k] is None:
                     continue
@@ -597,7 +726,7 @@ def propose_override(candidate: dict) -> tuple[dict, list[str]]:
     """
     notes: list[str] = []
     # Detect attempts to touch the floor (audit trail, but never applied).
-    for sec in ("DAILY", "WEEKLY", "YOLO", "MR"):
+    for sec in ("DAILY", "WEEKLY", "YOLO", "MR", "COPY"):
         for k in _IRREDUCIBLE:
             if isinstance(candidate.get(sec), dict) and k in candidate[sec]:
                 notes.append(f"DROPPED irreducible floor knob {sec}.{k}")

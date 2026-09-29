@@ -29,3 +29,32 @@ def closed(symbol: str, reason: str = "") -> str:
     sym = str(symbol).upper()
     r = (reason or "").strip()
     return f"Closed {sym}" + (f" — {r}" if r else "")
+
+
+def new_post(handle: str, text: str, limit: int = 130) -> str:
+    """'New post from @fullportnik: “…' — the monitoring line for a new post."""
+    body = " ".join(str(text or "").split())
+    if len(body) > limit:
+        body = body[:limit].rstrip() + "…"
+    return f"New post from @{str(handle).lstrip('@')}: “{body}”"
+
+
+def signal_read(kind: str, reason: str) -> str:
+    """'Read his post — no trade: it is market commentary.'"""
+    r = (reason or "").strip() or "no reason recorded"
+    if kind and kind != "none":
+        return f"Read his post as {kind} — {r}"
+    return f"Read his post — no trade: {r}"
+
+
+def shadow_order(symbol: str, side: str, qty: int, ref: float, stop: float,
+                 target: float) -> str:
+    """The line for an order the bot would place but cannot (no broker account).
+
+    Says 'would have' in plain words: the dashboard is read by a person, and a
+    shadow decision must never look like a placed order.
+    """
+    sym = str(symbol).upper()
+    verb = _VERB.get(str(side).lower(), f"Took a {side} position in")
+    return (f"Would have: {verb.lower()} {qty} {sym} at {ref:,.2f} "
+            f"(stop {stop:,.2f} / target {target:,.2f}) — no broker account yet")

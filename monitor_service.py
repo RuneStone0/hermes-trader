@@ -24,6 +24,22 @@ def _ssh(cmd: str):
     )
 
 
+def _age_minutes(ts: str | None) -> float | None:
+    """Minutes since an ISO-8601 UTC timestamp (None if absent/unparseable)."""
+    if not ts:
+        return None
+    s = str(ts).strip().replace("Z", "+00:00")
+    if " " in s and "T" not in s:                      # '2026-09-29 02:14:33.123+00:00'
+        s = s.replace(" ", "T", 1)
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+
+
 def check() -> tuple[list[str], dict]:
     problems: list[str] = []
     info: dict = {}
@@ -41,14 +57,42 @@ def check() -> tuple[list[str], dict]:
 
     # 2. health endpoint
     r = _ssh("curl -s -m 5 localhost:43210/health")
+    health: dict = {}
     try:
-        h = json.loads(r.stdout or "{}")
-        info["health"] = h.get("status", "unreachable")
-        if h.get("status") != "ok":
+        health = json.loads(r.stdout or "{}")
+        info["health"] = health.get("status", "unreachable")
+        if health.get("status") != "ok":
             problems.append(f"health endpoint not ok: {(r.stdout or '')[:200]}")
     except Exception:
         problems.append(f"health endpoint unreachable: {(r.stdout or r.stderr or '')[:200]}")
         info["health"] = "unreachable"
+
+    # 2b. The X-copy follower's feed. A bot that cannot read its source is a
+    # silent failure of exactly the kind this watchdog exists for: it looks idle
+    # while in fact it is blind. The feed reports the age of its last successful
+    # read, so a stalled poller is visible here instead of only on the dashboard.
+    xf = health.get("x_feed") or {}
+    if xf and not xf.get("error"):
+        last_poll = xf.get("last_poll") or xf.get("last_sweep")
+        age_min = _age_minutes(last_poll)
+        info["x_feed"] = (f"last check {age_min:.0f}m ago" if age_min is not None
+                          else "never polled")
+        if age_min is None:
+            problems.append("X feed has never completed a poll")
+        elif age_min > 30:
+            problems.append(f"X feed has not polled in {age_min:.0f} min "
+                            f"(expected every 10): the follower is blind")
+        if xf.get("last_error"):
+            err_age = _age_minutes(xf.get("last_error_at"))
+            if err_age is None or err_age <= 90:
+                problems.append(f"X feed error: {str(xf['last_error'])[:160]}")
+        if not xf.get("account_live"):
+            # Not a fault: shadow mode is the designed state until a fourth paper
+            # account exists. Recorded so the status file never implies real
+            # positions that do not exist.
+            info["copy_mode"] = "shadow (no broker account; nothing is traded)"
+    elif xf.get("error"):
+        problems.append(f"X feed status unavailable: {str(xf['error'])[:160]}")
 
     # 3. recent errors in container logs
     r = _ssh("docker logs --since 30m hermes-trader 2>&1 | grep -iE 'error|timeout|traceback|exception' | tail -5")
@@ -76,6 +120,10 @@ def main() -> None:
     lines = [f"# Service status — {now}", "",
              f"- container: {info['container']}",
              f"- health: {info['health']}"]
+    if info.get("x_feed"):
+        lines.append(f"- X feed: {info['x_feed']}")
+    if info.get("copy_mode"):
+        lines.append(f"- copy bot: {info['copy_mode']}")
     if recovery:
         lines.append(f"- auto-recovery: {recovery}")
     if info.get("recent_errors") and info["recent_errors"] != "none":
