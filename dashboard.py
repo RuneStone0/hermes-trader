@@ -301,11 +301,16 @@ def _stats(trades) -> dict:
             "net": sum(t["net_pnl"] or 0 for t in trades)}
 
 
-def _card(title: str, value: str, sub: str = "", sign=None) -> str:
+def _card(title: str, value: str, sub: str = "", sign=None, desc: str = "") -> str:
     color = ""
     if sign is not None:
         color = "pos" if sign > 0 else ("neg" if sign < 0 else "")
-    return (f"<div class='card'><div class='card-title'>{title}</div>"
+    # `desc` gives the card the same hover/tap tooltip every other metric here
+    # carries, so a card never needs a visible "what's this?" affordance.
+    t = (f"<span class='hint' tabindex='0' role='button' data-name='{html.escape(title)}' "
+         f"data-desc='{html.escape(desc)}'>{html.escape(title)}</span>" if desc
+         else title)
+    return (f"<div class='card'><div class='card-title'>{t}</div>"
             f"<div class='card-value {color}'>{value}</div>"
             f"<div class='card-sub'>{sub}</div></div>")
 
@@ -1325,20 +1330,45 @@ def _account_body(account: str) -> str:
     inception = _inception(account, trades)
     bench = _bench_return(inception)
     # The copy bot's own view: what he posted, and what the bot did about it.
+    live = config.copy_account_configured()
     signals = ""
+    win_txt = f"{s['win_rate']:.0%}"
+    cards = (f"<div class='grid'>\n"
+             f"{_portfolio_card(sa.get('equity'), sa.get('cash'))}\n"
+             f"{_netpl_card(s['net'], capital, bench)}\n"
+             f"{_card('Closed trades', str(s['n']))}\n"
+             f"{_card('Win rate', win_txt)}\n"
+             f"{_card('Open positions', str(len(open_t)))}\n"
+             f"{_curve_card(curve_pts, _bench_curve(curve_pts, capital))}\n"
+             f"</div>")
+    if account == "copy" and not live:
+        # There is no broker account, so a portfolio value, a P/L and an equity
+        # curve would be a row of dashes and zeroes — noise, not information.
+        # These four cards say what this bot actually did instead, and they use
+        # the same card, the same tooltip and the same grid as every other page.
+        posts = db.x_posts(limit=1000)
+        n_sig = sum(1 for p in posts if str(p["kind"] or "none") != "none")
+        n_shadow = sum(1 for p in posts if p["state"] == "done")
+        n_review = sum(1 for p in posts if p["state"] == "review")
+        cards = "<div class='grid'>" + "".join([
+            _card('His posts on file', str(len(posts)),
+                  'originals only — replies are ignored',
+                  desc='Every original post of his that the bot is holding, newest first. His replies are never read.'),
+            _card('Signals found', str(n_sig), 'posts that named a position',
+                  desc='Posts where he named an instrument and an action. The rest are commentary, market takes, or a profit screenshot.'),
+            _card('Would-be trades', str(n_shadow),
+                  'no broker account, so none were placed',
+                  desc='Trades the bot sized and would have placed. In shadow mode the broker is never contacted: no order, no fill, no P&L.'),
+            _card('Needs a look', str(n_review),
+                  'the bot will not act on these alone',
+                  desc='Posts that look like a position but that the bot will not mirror by itself — usually a trade visible only in a picture, or one with no instrument named.'),
+        ]) + "</div>"
     if account == "copy":
-        signals = f"<h2>His posts</h2>\n{_signals_block(config.copy_account_configured())}\n"
+        signals = f"<h2>His posts</h2>\n{_signals_block(live)}\n"
 
     return f"""
 <div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong>{_gov_meta(account)}{_feed_meta(account)}</div>
-<div class='grid'>
-{_portfolio_card(sa.get("equity"), sa.get("cash"))}
-{_netpl_card(s["net"], capital, bench)}
-{_card("Closed trades", str(s["n"]))}
-{_card("Win rate", f"{s['win_rate']:.0%}")}
-{_card("Open positions", str(len(open_t)))}
-{_curve_card(curve_pts, _bench_curve(curve_pts, capital))}
-</div>
+{cards}
 
 {signals}
 <h2>Positions &amp; trades</h2>

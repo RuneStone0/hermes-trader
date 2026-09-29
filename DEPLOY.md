@@ -13,10 +13,12 @@ mkdir -p ~/trader && cd ~/trader
 git clone https://github.com/RuneStone0/hermes-trader.git .
 cp .env.example .env
 chmod 600 .env
-# edit .env -> fill in DEEPSEEK_API_KEY + the 6 ALPACA_* keys
+# edit .env -> fill in DEEPSEEK_API_KEY, the 6 ALPACA_* keys, and XAI_API_KEY
+# (XAI_API_KEY powers the X post feed for the copy follower; ALPACA_COPY_* are
+#  optional and leave the follower in shadow mode when empty)
 docker compose up -d --build
 docker compose ps              # expect hermes-trader ... Up (healthy)
-curl -s localhost:8080/health
+curl -s localhost:43210/health
 ```
 
 ## Reviewing the dashboard
@@ -56,6 +58,12 @@ host and reports: `docker inspect --format '{{.State.Health.Status}}' hermes-tra
 | yolo             | 14:00, 17:00, 19:00       |
 | reconcile        | every 10 min              |
 | self-improvement | 21:30                     |
+| x_feed (copy)    | every 10 min, 24/7        |
+
+The `x_feed` job is deliberately **not** gated on the market or on weekdays:
+posts arrive at any hour, and the point of the follower is to have seen a post
+before the market opens rather than after. An entry that arrives while the
+market is shut waits for the open inside the bot.
 
 ## Safety floor (applies to YOLO too)
 
