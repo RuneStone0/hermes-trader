@@ -39,6 +39,27 @@ _RETRY_SLEEP = 2.0
 # (measured: finish_reason='stop', content 176-178 chars, ~10 s).
 _DECISION_MAX_TOKENS = 8000
 
+# Truncation recovery. A starved answer is a cut-off SPIRAL, not a verdict:
+# live 2026-09-30 14:08 UTC the daily-ORB call spent all 8000 tokens on
+# reasoning and returned 0 chars (finish_reason='length') while re-litigating a
+# net-R:R "minimum" it had invented (the deterministic floor is 0.5 and the
+# setup had already cleared it). Normal calls use ~350-430 tokens, so this is a
+# rare spiral rather than a tight budget. Rather than lose the whole decision
+# cycle (the bot marks itself decided and never revisits the day), hand the
+# model its OWN cut-off analysis back and ask for the JSON verdict alone --
+# measured live: 1.0 s, 72 tokens, finish_reason='stop', valid verdict. The
+# context is unchanged, so the recovered answer is still the model's own
+# decision; if it is unreadable too, the call raises exactly as before (fail
+# closed AND loud). Budget is kept small so even a failed retry stays inside
+# the scheduler's job timeout (app.py: daily 180s).
+_RETRY_ANSWER_MAX_TOKENS = 1500
+_RETRY_ANSWER_TIMEOUT = 45
+_RETRY_REASONING_CHARS = 4000
+_RETRY_MIN_REASONING_CHARS = 200
+_RETRY_ANSWER_PROMPT = ("Your analysis above was cut off by the output token "
+                        "limit. Do not continue analysing. Output ONLY the "
+                        "final JSON object now.")
+
 
 class AdvisorError(Exception):
     pass
@@ -96,6 +117,24 @@ def _extract_json(content: str):
         return {}
 
 
+def _recover_truncated(body: dict, reasoning_text: str) -> dict:
+    """Second attempt at a truncated (finish_reason='length') answer.
+
+    Feed the model's OWN cut-off reasoning back as its previous turn and ask
+    for the JSON verdict alone — so the retry answers the question the first
+    call was still deliberating, instead of starting a fresh spiral. Same
+    context, same system prompt: the recovered decision is still the model's.
+    """
+    msgs = list(body.get("messages") or [])
+    msgs.append({"role": "assistant",
+                 "content": reasoning_text[-_RETRY_REASONING_CHARS:]})
+    msgs.append({"role": "user", "content": _RETRY_ANSWER_PROMPT})
+    retry = dict(body)
+    retry["messages"] = msgs
+    retry["max_tokens"] = _RETRY_ANSWER_MAX_TOKENS
+    return _post(retry, timeout=_RETRY_ANSWER_TIMEOUT)
+
+
 def decide(context: dict, model: str | None = None) -> dict:
     """Return {'decision','rationale','size_multiplier'}.
 
@@ -129,21 +168,37 @@ def decide(context: dict, model: str | None = None) -> dict:
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content") or ""
+    reasoning_text = " ".join(str(message.get("reasoning_content") or "").split())
     out = _extract_json(content)
+    retried = False
     if not str(out.get("decision") or "").strip():
-        # Empty, truncated or non-JSON answer (see _DECISION_MAX_TOKENS). Fail
-        # closed, but with the diagnosis attached so the operator can tell a
-        # starved/broken model call from a genuine "no setup today".
+        # Empty, truncated or non-JSON answer (see _DECISION_MAX_TOKENS). A
+        # starved answer is a cut-off spiral rather than a verdict, so give the
+        # model its own analysis back and ask for the verdict alone before
+        # failing closed AND loud — an unreadable answer must never look like
+        # the bot deciding there was no setup.
+        if (choice.get("finish_reason") == "length"
+                and len(reasoning_text) >= _RETRY_MIN_REASONING_CHARS):
+            retried = True
+            try:
+                retry = _recover_truncated(body, reasoning_text)
+            except Exception:
+                retry = {}
+            msg2 = (retry.get("choices") or [{}])[0].get("message") or {}
+            out = _extract_json(msg2.get("content") or "")
+    if not str(out.get("decision") or "").strip():
+        # Fail closed, but with the diagnosis attached so the operator can tell
+        # a starved/broken model call from a genuine "no setup today".
         usage = data.get("usage") or {}
-        tail = " ".join(content.split())[:160]
-        if not tail:
-            tail = " ".join(str(message.get("reasoning_content") or "").split())[-160:]
+        tail = " ".join(content.split())[:160] or reasoning_text[-160:]
         raise AdvisorError(
             "advisor returned no readable decision "
             f"(finish_reason={choice.get('finish_reason')}, "
             f"completion_tokens={usage.get('completion_tokens')}, "
             f"reasoning_tokens={(usage.get('completion_tokens_details') or {}).get('reasoning_tokens')}, "
-            f"content={len(content)} chars)" + (f"; tail: {tail}" if tail else "")
+            f"content={len(content)} chars"
+            + (", a verdict-only retry on its own analysis failed too" if retried else "")
+            + ")" + (f"; tail: {tail}" if tail else "")
         )
 
     decision = str(out.get("decision")).strip().lower()

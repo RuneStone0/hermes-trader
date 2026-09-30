@@ -74,6 +74,8 @@ def test_starved_answer_raises_not_no_go() -> None:
         check("a starved (empty-content) answer raises AdvisorError", True, text[:90])
         check("the error carries the diagnosis (finish_reason)", "finish_reason=length" in text)
         check("the error is not a silent 'no_go'", "no_go" not in text.split("tail")[0])
+        check("a second unreadable answer is reported as such",
+              "retry on its own analysis failed too" in text)
     except Exception as e:                                   # pragma: no cover
         check("a starved (empty-content) answer raises AdvisorError", False,
               f"raised {type(e).__name__}")
@@ -139,11 +141,81 @@ def test_go_and_no_go_round_trip_with_a_reason() -> None:
         advisor._post, config.DEEPSEEK_API_KEY = orig, orig_key
 
 
+def test_truncated_answer_is_recovered_from_the_models_own_analysis() -> None:
+    """Live 2026-09-30 14:08 UTC: the daily-ORB call spent all 8000 tokens on
+    reasoning and returned 0 chars, so the bot marked itself decided and lost
+    the whole day. A starved answer is a cut-off spiral: hand it back and ask
+    for the verdict."""
+    orig, orig_key = advisor._post, config.DEEPSEEK_API_KEY
+    config.DEEPSEEK_API_KEY = "test-key"
+    calls: list[dict] = []
+
+    def _fake_post(body: dict, timeout: int) -> dict:
+        calls.append({**body, "_timeout": timeout})
+        if len(calls) == 1:
+            return STARVED
+        return _resp('{"decision": "no_go", "rationale": "counter-trend short", "size_multiplier": 1.0}')
+
+    advisor._post = _fake_post
+    try:
+        out = advisor.decide({"symbol": "SPY"})
+        check("a truncated answer is retried instead of losing the decision",
+              len(calls) == 2, f"calls={len(calls)}")
+        if len(calls) == 2:
+            msgs = calls[1]["messages"]
+            check("the retry hands the model its own cut-off reasoning",
+                  msgs[-2]["role"] == "assistant" and "Weighing the setup" in msgs[-2]["content"])
+            check("the retry asks for the verdict only, not more analysis",
+                  msgs[-1]["role"] == "user" and "Do not continue analysing" in msgs[-1]["content"])
+            check("the retry keeps the same context and system prompt",
+                  msgs[0] == calls[0]["messages"][0] and msgs[1] == calls[0]["messages"][1])
+            check("the retry cannot spiral again (smaller budget, shorter timeout)",
+                  calls[1]["max_tokens"] < calls[0]["max_tokens"] and calls[1]["_timeout"] < 90,
+                  f"max_tokens={calls[1]['max_tokens']} timeout={calls[1]['_timeout']}s")
+        check("the recovered verdict is used", out["decision"] == "no_go",
+              str(out.get("rationale")))
+    except Exception as e:                                   # pragma: no cover
+        check("a truncated answer is retried instead of losing the decision", False,
+              f"raised {type(e).__name__}: {e}")
+    finally:
+        advisor._post, config.DEEPSEEK_API_KEY = orig, orig_key
+
+
+def test_truncation_without_reasoning_still_raises() -> None:
+    """No reasoning text (or too little of it) to hand back: nothing to recover
+    from, so fail closed without spending a second call."""
+    orig, orig_key = advisor._post, config.DEEPSEEK_API_KEY
+    config.DEEPSEEK_API_KEY = "test-key"
+    short = _resp("", finish="length", completion=8000, reasoning=8000,
+                  reasoning_text="SPY short. Maybe.")
+    for label, fixture in (("nothing to hand back", _resp("", finish="length",
+                                                          completion=8000, reasoning=8000)),
+                           ("a near-empty thought", short)):
+        calls: list[dict] = []
+
+        def _counting_post(body: dict, timeout: int, _fx=fixture) -> dict:
+            calls.append(body)
+            return _fx
+
+        advisor._post = _counting_post
+        try:
+            advisor.decide({"symbol": "SPY"})
+            check(f"truncation with {label} raises", False, "returned instead")
+        except advisor.AdvisorError:
+            check(f"truncation with {label} raises", True)
+            check(f"no recovery call is spent when there is {label}",
+                  len(calls) == 1, f"calls={len(calls)}")
+        finally:
+            advisor._post, config.DEEPSEEK_API_KEY = orig, orig_key
+
+
 def main() -> int:
     print(f"config VERSION {config.VERSION}")
     for fn in (test_starved_answer_raises_not_no_go, test_non_json_answer_raises,
                test_missing_decision_key_raises, test_token_budget_covers_reasoning_plus_answer,
-               test_go_and_no_go_round_trip_with_a_reason):
+               test_go_and_no_go_round_trip_with_a_reason,
+               test_truncated_answer_is_recovered_from_the_models_own_analysis,
+               test_truncation_without_reasoning_still_raises):
         fn()
     print()
     if FAILS:
