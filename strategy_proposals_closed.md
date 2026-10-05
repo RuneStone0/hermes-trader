@@ -98,6 +98,39 @@ stop, which this trade does not.
 
 ---
 
+## 8. "The copy bot has produced no trade — the feed or the reader must be broken"
+**VERDICT: NOT BROKEN. The source published nothing copyable. Measured 2026-10-05
+(14 posts, `x_posts` table + journal).**
+
+Every post the bot has seen since it went live (2026-09-29), dispositioned:
+11 → `ignored` "no trade" (profit brags, follower thanks, trading philosophy,
+Robinhood-summit chatter, two NYC sunsets); 2 → `review` (his two "next full port
+play" teases — the ticker existed only in the attached image, so the text reader
+parked them **on purpose** instead of guessing); 1 → `rejected` (2026-10-01
+"$AMZN full ported, then exited at small profit" — an exit of something the bot
+never held). Zero entries, and correctly so: he has not yet named a ticker in
+text. If a future review calls this bot idle-and-broken, it must first show a post
+whose TEXT named an instrument and produced no action.
+
+## 9. "A read can be missing from the journal even though it happened"
+**VERDICT: DEFECT FOUND AND FIXED 2026-10-05 (`bdef56d`, VERSION 1.6.2).**
+
+The `kind == "close"` branch of `x_copy_run.run()` wrote the outcome to the
+`x_posts` table and journaled nothing when the exit was not mirrored — the only
+terminal branch that did. Measured: **14 `x_posts` rows against 13 disposition
+journal lines**; the missing one is exactly the 2026-10-01 AMZN rejected exit
+(state=`rejected`, kind=`close`, confidence 0.75). The module's own contract says
+a post is "recorded as read-and-ignored with the reason, never quietly dropped" —
+that is why this is a defect and not a style choice.
+
+The general rule: **a decision written to a table but not to the journal is
+invisible to the person reading the dashboard.** Audit a bot by counting the rows
+it dispositioned against the lines it wrote; any gap is a silent drop. A
+regression test now pins it (`tests/test_x_copy.py`, fails on the old code).
+
+---
+
 Settled findings are also mirrored at
 `/data/trading/strategy_proposals_closed.md` inside the `hermes-trader`
 container — that volume copy is the one the nightly routine reads.
+

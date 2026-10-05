@@ -132,3 +132,65 @@ MFE is +0.263R, 4 of 13 trades never traded above their entry at all (MFE ≤ 0)
 only 3 of 13 ever reached +1R. That is selection, not exit management — and the
 sector-RS gate proposed to fix it is the one just tested as unsupported in its
 unconditional form.
+
+---
+
+## 2026-10-05 12:10 UTC — WEEKLY REVIEW DISPOSITION (week of 2026-09-29 → 10-02)
+
+**Books in R, and against SPY buy-and-hold over the same four sessions**
+(SPY 765.49 on 09-28 → 769.65 on 10-02 = **+0.54%**):
+
+| book | closed this week | week R | week net $ | all-time R (n) | vs start |
+|---|---|---|---|---|---|
+| yolo | 3 — SMH +2.02R (target), TLT +1.74R (LLM close), XLV −0.11R (scratch) | **+3.64R** | +$97.03 | **−5.44R (16)** | −0.94% |
+| mr_rsi2 | 0 (1 opened: XLV 6sh, 50% size, event day) | — | — | +0.33R (2) | — |
+| daily_orb | 0 (2 × no_go; 1 advisor error 09-30, fixed in 1bce541) | — | — | +0.21R (1) | +0.24% |
+| weekly_pullback | 0 (never fired — rare trigger, see §4.1 of the backtest) | — | — | — | 0.00% |
+| x_copy | 0 — shadow mode, no broker account | — | — | — | — |
+
+YOLO's equity went 9844.95 (09-28) → 9905.93 = **+0.62% vs SPY's +0.54%**: the
+autonomous book's **first green week**, and the first week it out-earned
+buy-and-hold. All-time YOLO improved from −9.09R (13 trades) on 09-28 to
+−5.44R (16).
+
+**The entry-quality question moved, on 3 more trades.** `r_telemetry.py` re-run
+live in the container 2026-10-05 12:05: median MFE **0.263R → 0.463R**,
+MFE ≥ +1R **3/13 → 5/16**, capture **−1.467 → −0.517**. The two new winners are
+the cleanest exits the book has produced: TLT MFE +1.766R → realised +1.74R and
+SMH MFE +2.059R → realised +2.02R (capture ≈ 0.98 on both — the exits kept
+almost everything the entries were offered).
+
+**Classification: (b) sample too small to tell.** 3 closed trades this week.
+n=16 against a 30-trade gate. **No strategy parameter was changed.** One
+demonstrable defect was found and fixed — in the copy bot, not in a strategy.
+
+**Demonstrable defect (fixed, `bdef56d`, VERSION 1.6.2): the copy bot dropped a
+decision from the journal.** In its first 14 posts it read 11 as "no trade"
+(hype, P&L brags, philosophy, sunsets), parked 2 of his "next full port play"
+teases as `review` (the ticker was only in the attached image), and dispositioned
+1 real trade — 2026-10-01 "$AMZN full ported … then exited at small profit". That
+one was read (`kind=close`, AMZN, confidence 0.75) and marked
+`rejected — he exited, but this bot does not hold it`, and **journaled nowhere**:
+14 posts against 13 journal lines. The close path wrote the state to the table
+and skipped the event, so the record read "New post from @fullportnik: 'full
+ported $AMZN today…'" and then silence. Fixed; the regression test fails on the
+old code and passes on the new one.
+
+**PENDING (unevidenced, NOT deployed): give the copy reader eyes.** Both "full
+port play" posts carried the ticker only in the attached image, and the text
+reader correctly parks them as `review` rather than guessing. Turning image posts
+into signals requires an extraction measured for recall on a labelled set first —
+the same bar the text path had to clear (a 2–6-of-6 enumeration was rejected for
+this reason). A vision path that invents a ticker is worse than one that parks it.
+**No deploy without that measurement.**
+
+**Also fixed:** `tests/test_x_copy.py`'s reply check had been failing since
+2026-10-02 — it hard-coded 2026-09-28 timestamps and `_finish_posts` drops
+anything older than `X_FEED['lookback_days']` (4). A permanently-red suite is
+where a real regression hides; the dates are now relative to now.
+
+**Watch next week:** whether the ≥+1R MFE rate keeps rising with sane stop
+geometry (5/16 now), and whether QQQ (MFE +1.816R, MAE +0.001R — never went
+adverse) reaches its target or gives the profit back. Two good closes are not a
+trend and 16 trades is not 30.
+
