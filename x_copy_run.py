@@ -646,11 +646,26 @@ def run(dry_run: bool = False, handle: str | None = None) -> None:
                 a = {}
             state, reason = close_position(dclient, row, a, positions,
                                            live and not dry_run)
-            if state != "done":
-                db.set_x_post(row["post_id"], state="rejected", reason=reason)
-            else:
+            if state == "done":
                 db.set_x_post(row["post_id"], state="done", reason=reason)
                 positions.pop(str(row["symbol"] or "").upper(), None)
+            else:
+                # A close we did NOT mirror is still a decision, and the journal
+                # is the audit trail. Without a line here the record shows "New
+                # post from @…: full ported $AMZN today…" and then silence, so
+                # "why didn't it follow his exit?" has no answer (observed
+                # 2026-10-01: the post was read, dispositioned and never
+                # journaled — 14 posts, 13 journal lines).
+                db.set_x_post(row["post_id"],
+                              state="review" if state == "review" else "rejected",
+                              reason=reason)
+                if not any(str(e["reason"] or "").startswith(reason[:40])
+                           for e in db.recent_events(5, account=ACCOUNT)):
+                    db.log_event(ACCOUNT, STRATEGY,
+                                 "review" if state == "review" else "no_go",
+                                 f"Did not follow his exit of {row['symbol']} — {reason}",
+                                 detail=row["url"])
+                print(f"[copy] did not follow his exit {row['symbol']}: {reason}")
             continue
 
         # entry

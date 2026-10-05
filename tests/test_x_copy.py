@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -216,13 +217,18 @@ def test_feed_validation() -> None:
     check("media-only posts survive",
           xfeed._post("h", "123", None, "2026-09-28T14:42:13Z", "", False, True, "xai") is not None)
 
-    a = xfeed._post("h", "2", None, "2026-09-28T10:00:00Z", "b", False, False, "xai")
-    b = xfeed._post("h", "1", None, "2026-09-27T10:00:00Z", "a", False, False, "xai")
+    # Timestamps are relative to NOW: `_finish_posts` drops anything older than
+    # config.X_FEED["lookback_days"], so a hard-coded date rots into a false
+    # failure a few days after it is written (this check was red from 2026-10-02
+    # on, and a permanently-red suite is how a real regression hides).
+    _t = lambda **kw: (datetime.now(timezone.utc) - timedelta(**kw)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    a = xfeed._post("h", "2", None, _t(minutes=30), "b", False, False, "xai")
+    b = xfeed._post("h", "1", None, _t(minutes=60), "a", False, False, "xai")
     deduped = xfeed._dedupe([a, b, a])
     check("de-duplicating by id, newest first",
           [p["id"] for p in deduped] == ["2", "1"])
 
-    reply = xfeed._post("h", "3", None, "2026-09-28T11:00:00Z", "r", True, False, "xai")
+    reply = xfeed._post("h", "3", None, _t(minutes=10), "r", True, False, "xai")
     two = xfeed._finish_posts([reply, a], config.X_FEED)
     check("replies are dropped (the user asked for original posts only)",
           [p["id"] for p in two] == ["2"])
@@ -486,6 +492,44 @@ def test_no_broker_client_without_keys() -> None:
           x_copy_run.broker_client() is None)
 
 
+def test_a_close_we_do_not_follow_is_journaled() -> None:
+    """A rejected EXIT is a decision too, and must leave a line in the journal.
+
+    Regression: the close path wrote state='rejected' to the x_posts table and
+    journaled nothing, so the record read "New post from @…: full ported $AMZN
+    today…" and then silence. Observed live 2026-10-01 (14 posts, 13 lines).
+    """
+    print("audit: a close we did NOT mirror is journaled, never silent")
+    _sql("delete from x_posts")
+    _sql("delete from events where account='copy'")
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    db.upsert_x_post("888", "fullportnik", posted_at=recent,
+                     text="full ported $AMZN today then exited amazon at small profit")
+    db.set_x_post("888", state="exit", kind="close", symbol="AMZN", side="long",
+                  confidence=0.75, reason="he exited AMZN",
+                  analysis_json=json.dumps(sig(kind="close", symbol="AMZN",
+                                               reason="he exited AMZN")))
+
+    real_client, real_fetch = x_copy_run.data_client, x_copy_run.xfeed.fetch_posts
+    x_copy_run.data_client = lambda: FakeClient(price=100.0)
+    x_copy_run.xfeed.fetch_posts = lambda **k: {
+        "error": None, "posts": [], "provider": "test", "calls": 0}
+    try:
+        x_copy_run.run()                       # shadow mode: places nothing
+    finally:
+        x_copy_run.data_client, x_copy_run.xfeed.fetch_posts = real_client, real_fetch
+
+    row = [r for r in db.x_posts(limit=50) if r["post_id"] == "888"][0]
+    check("the unwitnessed exit is recorded as rejected, not 'done'",
+          row["state"] == "rejected", str(row["state"]))
+    lines = [e for e in db.recent_events(50, account="copy")
+             if e["decision"] == "no_go" and "AMZN" in (e["reason"] or "")]
+    check("...and it leaves a journal line answering 'why not?'",
+          len(lines) == 1, str([e["reason"] for e in lines]))
+    _sql("delete from x_posts")
+
+
 def main() -> None:
     for fn in (test_feed_never_confuses_failure_with_silence,
                test_feed_validation,
@@ -499,7 +543,8 @@ def main() -> None:
                test_re_reads_are_inert,
                test_stale_posts_are_parked,
                test_config_and_bookkeeping,
-               test_no_broker_client_without_keys):
+               test_no_broker_client_without_keys,
+               test_a_close_we_do_not_follow_is_journaled):
         fn()
     print()
     if FAILS:
