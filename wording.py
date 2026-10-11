@@ -9,6 +9,18 @@ from __future__ import annotations
 # side -> human verb (daily/weekly use long/short; yolo uses buy/sell).
 _VERB = {"buy": "Bought", "long": "Bought", "sell": "Sold short", "short": "Sold short"}
 
+# What the bot decided a post WAS. Read on the dashboard against a post, so it
+# has to read as a sentence: "Read his post — he named names but took no
+# position: …". An unknown kind falls back to the raw label rather than a guess.
+_KIND_PHRASE = {
+    "open": "he says he is in a position",
+    "add": "he says he added to a position",
+    "close": "he says he exited",
+    "trim": "he says he trimmed",
+    "interest": "he named names but took no position",
+    "unknown": "it may be a position, but it could not be pinned down",
+}
+
 
 def opened(symbol: str, side: str, qty: int, size_multiplier: float | None = None) -> str:
     """'Bought 12 SPY' / 'Sold short 23 XLU' (+ a note when size was cut)."""
@@ -43,6 +55,9 @@ def signal_read(kind: str, reason: str) -> str:
     """'Read his post — no trade: it is market commentary.'"""
     r = (reason or "").strip() or "no reason recorded"
     if kind and kind != "none":
+        phrase = _KIND_PHRASE.get(str(kind).lower())
+        if phrase:
+            return f"Read his post — {phrase}: {r}"
         return f"Read his post as {kind} — {r}"
     return f"Read his post — no trade: {r}"
 

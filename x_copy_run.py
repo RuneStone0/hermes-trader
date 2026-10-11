@@ -122,36 +122,66 @@ def broker_client() -> AlpacaClient | None:
 # --------------------------------------------------------------------------- #
 _SYSTEM = (
     "You read ONE post from a public trader on X and decide, for a bot that "
-    "mirrors his positions, whether it is an actionable TRADE SIGNAL. "
+    "follows his calls, whether it tells the bot anything it can act on. "
     "You are a strict extractor, not a commentator: report only what the post "
-    "actually says. Never infer a position he did not state, never invent a "
-    "ticker, and never treat his opinions as a position.\n"
+    "actually says. Never invent a ticker, and never treat his opinions about "
+    "the market as a position.\n"
+    "CONTEXT THAT MATTERS: his actual trade calls are largely behind a paywall. "
+    "What he posts publicly is often a NAME he is interested in rather than a "
+    "position he has taken. That kind of post is still useful to this bot, so it "
+    "must be reported as 'interest' — do not throw it away as commentary, and do "
+    "not inflate it into a position he never claimed.\n"
     "HOW TO CLASSIFY (kind):\n"
     "  'open'  — he states he HAS TAKEN or IS TAKING a position in a named "
     "instrument and names it (or names it beyond doubt, e.g. a $cashtag).\n"
     "  'add'   — he is adding to a named position he already said he holds.\n"
     "  'close' — he states he SOLD / exited / closed a SPECIFIC named position.\n"
     "  'trim'  — he states he sold PART of a named position.\n"
-    "  'none'  — everything else: market commentary, education, jokes, polls and "
-    "engagement bait ('what should I full port next?'), P&L brag posts (a dollar "
-    "figure with no instrument and no action), follower milestones, streaming "
-    "announcements, and statements that he is in cash / holding nothing (being "
-    "flat is not a signal to close OUR positions).\n"
+    "  'interest' — he names one or more SPECIFIC tradable instruments as things "
+    "he likes, wants, is watching, is interested in or is considering, IN THE "
+    "PRESENT OR FORWARD-LOOKING, and with a bullish or positive lean ('my "
+    "favourite chart right now', 'names I like here', 'keeping an eye on X', "
+    "'X looks good'), WITHOUT saying he has taken a position.\n"
+    "  NOT 'interest' — be strict, these are 'none' even though a ticker is "
+    "named:\n"
+    "    * past-tense or past-performance commentary ('X has rallied', 'I sold X "
+    "last month for a loss', 'X ran 30% since...');\n"
+    "    * macro or correlation musings that merely cite a ticker ('yields up, "
+    "and look at X');\n"
+    "    * jokes, sarcasm or mockery about a ticker ('trading X is masochism'), "
+    "or any mention he is bearish or dismissive about — he must be positive "
+    "about the name for it to count;\n"
+    "    * companies in the news, someone else's trade, comparisons, or a name "
+    "used as an example rather than as something he wants.\n"
+    "  'none'  — everything else: market commentary and macro talk with no "
+    "instrument named, education, jokes, polls and engagement bait ('what should "
+    "I full port next?'), P&L brag posts (a dollar figure with no instrument and "
+    "no action), follower milestones, stream announcements, and statements that "
+    "he is in cash / holding nothing (being flat is not a signal to close OUR "
+    "positions). If a post names no specific tradable instrument, it is 'none'.\n"
     "  'unknown' — it LOOKS like a position but you cannot pin it down (he "
     "announces a trade without naming it; the position is only visible in an "
     "attached image; the ticker is ambiguous). Use this instead of guessing.\n"
     "FIELDS:\n"
-    "  symbol — the ticker only ('META'), '' when there is none. A company name "
-    "may be resolved to its ticker only when it is unambiguous.\n"
-    "  side   — 'long' or 'short', '' when unclear. 'full port' means long.\n"
+    "  symbols — every SPECIFIC tradable ticker the post names that fits the "
+    "classification above, best/most emphasised first, as ['META','AAPL']. An "
+    "empty list when there is none. Real US-listed equity/ETF tickers only: no "
+    "index symbols (SPX, NDX), no crypto pairs, no options, and never a company "
+    "name you could not resolve beyond doubt. Do not pad the list.\n"
+    "  symbol — the first entry of symbols (kept for the single-name readers).\n"
+    "  side   — 'long' or 'short', '' when unclear. 'full port' means long. For "
+    "'interest', use 'long' unless he clearly expresses a bearish view.\n"
     "  stop / target — ONLY a price he actually stated. Otherwise null. Do not "
     "invent levels; the bot derives its own and will say so.\n"
-    "  confidence — 0.0-1.0: how sure you are that this post is an actionable "
-    "signal about a specific instrument. Reserve >0.8 for an explicit position.\n"
+    "  confidence — 0.0-1.0: how sure you are that this post tells the bot about "
+    "a specific instrument. Reserve >0.8 for an explicit stated position; a clear "
+    "named interest can be 0.5-0.7; a passing or hedged mention belongs below "
+    "0.4.\n"
     "  reason — one short plain-English sentence a non-expert can read.\n"
     "Respond with ONLY a JSON object (no markdown):\n"
-    '{"kind":"open|add|close|trim|none|unknown","symbol":"","side":"",'
-    '"stop":null,"target":null,"confidence":0.0,"reason":"","needs_media":false}'
+    '{"kind":"open|add|close|trim|interest|none|unknown","symbols":[],"symbol":"",'
+    '"side":"","stop":null,"target":null,"confidence":0.0,"reason":"",'
+    '"needs_media":false}'
 )
 
 
@@ -159,7 +189,8 @@ def analyse(post) -> dict:
     """One LLM read of one post. Raises AdvisorError if the answer is unreadable."""
     text = str(post["text"] or "").strip()
     if not text and not post["has_media"]:
-        return {"kind": "none", "symbol": "", "side": "", "stop": None, "target": None,
+        return {"kind": "none", "symbol": "", "symbols": [], "side": "",
+                "stop": None, "target": None,
                 "confidence": 0.0, "reason": "the post has no text and no media",
                 "needs_media": False}
     payload = {
@@ -180,30 +211,7 @@ def analyse(post) -> dict:
     if not isinstance(out, dict) or not str(out.get("kind") or "").strip():
         raise advisor.AdvisorError(
             f"unreadable signal read ({len(content)} chars): {' '.join(content.split())[:160]}")
-
-    kind = str(out.get("kind")).strip().lower()
-    if kind not in ("open", "add", "close", "trim", "none", "unknown"):
-        kind = "unknown"
-    symbol = "".join(ch for ch in str(out.get("symbol") or "").upper() if ch.isalnum() or ch in "./")
-    side = str(out.get("side") or "").strip().lower()
-    if side not in ("long", "short"):
-        side = ""
-    if kind in ("open", "add") and not side:
-        side = "long"          # his style is directional-long; the journal shows why
-    try:
-        confidence = max(0.0, min(1.0, float(out.get("confidence") or 0.0)))
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return {
-        "kind": kind,
-        "symbol": symbol,
-        "side": side,
-        "stop": out.get("stop"),
-        "target": out.get("target"),
-        "confidence": confidence,
-        "reason": str(out.get("reason") or "").strip() or "no reason given by the model",
-        "needs_media": bool(out.get("needs_media")),
-    }
+    return _clean_analysis(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -255,10 +263,71 @@ def _asset_class(sym: str) -> str:
 # A plain US ticker: 1-5 letters, optionally with a class suffix (BRK.B).
 _SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(?:\.[A-Z])?$")
 
+# Quotes traders name that are NOT tradable on Alpaca retail: they pass the
+# ticker regex, so they must be refused by name. SPY/QQQ/DIA/IWM are ETFs and are
+# fine; these are the indices and volatility measures behind them.
+_INDEX_SYMBOLS = {"SPX", "SPXW", "NDX", "VIX", "RUT", "DJI", "COMP", "XSP", "OEX",
+                  "NYA", "SOX", "VIX9D"}
+
 
 def _valid_symbol(sym: str) -> bool:
-    """Retail US equity/ETF ticker shape. Options and crypto never match."""
-    return bool(_SYMBOL_RE.match(sym or ""))
+    """Retail US equity/ETF ticker shape. Options and crypto never match.
+
+    Shape alone is not enough: SPX and NDX pass the regex and are not tradable
+    on Alpaca retail (SPY is the proxy), so the index symbols are refused here
+    as well as in the prompt — a model that names one must not be able to create
+    a position in something the broker will reject.
+    """
+    s = str(sym or "").upper()
+    return bool(_SYMBOL_RE.match(s)) and s not in _INDEX_SYMBOLS
+
+
+def _clean_analysis(out: dict) -> dict:
+    """Normalise one model answer into the shape the bot acts on.
+
+    Kept separate from the model call so the parsing rules are testable without
+    a live LLM: everything that decides what symbol/kind/side the bot sees from a
+    post happens here.
+    """
+    kind = str(out.get("kind")).strip().lower()
+    if kind not in ("open", "add", "close", "trim", "interest", "none", "unknown"):
+        kind = "unknown"
+    # `symbols` is the honest shape of what he posts (a "names I like" post can
+    # list several); `symbol` is kept for every reader that handles one name.
+    raw_syms = out.get("symbols")
+    if isinstance(raw_syms, str):
+        raw_syms = [raw_syms]
+    if not isinstance(raw_syms, (list, tuple)):
+        raw_syms = []
+    if out.get("symbol"):
+        raw_syms = list(raw_syms) + [out["symbol"]]
+    symbols: list[str] = []
+    for s in raw_syms:
+        sym = "".join(ch for ch in str(s or "").upper() if ch.isalnum() or ch in "./")
+        if sym and sym not in symbols and _valid_symbol(sym):
+            symbols.append(sym)
+    symbols = symbols[:5]
+    symbol = symbols[0] if symbols else ""
+    side = str(out.get("side") or "").strip().lower()
+    if side not in ("long", "short"):
+        side = ""
+    if kind in ("open", "add", "interest") and not side:
+        side = "long"          # his style is directional-long; the journal shows why
+    try:
+        confidence = max(0.0, min(1.0, float(out.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {
+        "kind": kind,
+        "symbol": symbol,
+        "symbols": symbols,
+        "side": side,
+        "stop": out.get("stop"),
+        "target": out.get("target"),
+        "confidence": confidence,
+        "reason": str(out.get("reason") or "").strip() or "no reason given by the model",
+        "needs_media": bool(out.get("needs_media")),
+    }
 
 
 def shadow_book() -> dict[str, dict]:
@@ -274,15 +343,52 @@ def shadow_book() -> dict[str, dict]:
     rows.sort(key=lambda r: (r["posted_at"] or "", str(r["post_id"])))
     book: dict[str, dict] = {}
     for r in rows:
-        sym = str(r["symbol"] or "").upper()
-        if not sym:
-            continue
         kind = str(r["kind"] or "")
-        if kind in ("open", "add"):
-            book[sym] = dict(r)
+        # A post can carry several names (a "names I like" post), and only some of
+        # them may have been taken — `acted` is what the bot actually entered, so
+        # the book reflects the positions and not the reading list.
+        syms = [str(r["symbol"] or "").upper()]
+        try:
+            a = json.loads(r["analysis_json"] or "{}")
+            syms = [str(s).upper() for s in (a.get("acted") or a.get("symbols") or syms)]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        syms = [s for s in syms if s]
+        if kind in ("open", "add", "interest"):
+            for s in syms:
+                book[s] = dict(r)
         elif kind in ("close", "trim"):
-            book.pop(sym, None)
+            for s in syms:
+                book.pop(s, None)
     return book
+
+
+def _entry_symbols(row, a: dict) -> list[str]:
+    """Which tickers this post asks the bot to act on.
+
+    One, for a stated position. Several for a mention: a "names I like" post is
+    a list, and taking only the first would throw away most of what he said. The
+    cap keeps one post from filling the whole book.
+    """
+    kind = str(row["kind"] or "")
+    if kind == "interest":
+        syms = [str(s).strip().upper() for s in (a.get("symbols") or []) if s]
+        if not syms and a.get("symbol"):
+            syms = [str(a["symbol"]).strip().upper()]
+        cap = int(config.COPY.get("mention_max_symbols", 2) or 1)
+        return syms[:max(1, cap)]
+    sym = str(a.get("symbol") or "").strip().upper()
+    return [sym] if sym else []
+
+
+def _entry_risk_mult(kind: str) -> float:
+    """Mentions are sized down, not skipped: less information, same rules."""
+    if str(kind) != "interest":
+        return 1.0
+    try:
+        return max(0.05, min(1.0, float(config.COPY.get("mention_size_mult", 0.5))))
+    except (TypeError, ValueError):
+        return 0.5
 
 
 def open_position(client: AlpacaClient, post, a: dict, equity: float,
@@ -351,8 +457,14 @@ def open_position(client: AlpacaClient, post, a: dict, equity: float,
         return "rejected", f"{sym}: target {target:.2f} sits inside the noise vs live {ref:.2f}"
 
     # --- size: OUR risk rules, never his size ------------------------------ #
+    # A mention carries less information than a stated position, so it is sized
+    # down rather than skipped: same rules, smaller budget.
+    try:
+        risk_mult = max(0.05, min(1.0, float(a.get("risk_mult") or 1.0)))
+    except (TypeError, ValueError):
+        risk_mult = 1.0
     max_notional = equity * float(config.COPY["max_position_pct"])
-    max_risk = equity * float(config.COPY["max_risk_pct"])
+    max_risk = equity * float(config.COPY["max_risk_pct"]) * risk_mult
     qty = int(min(max_notional / ref, max_risk / risk_dist))
     if buying_power > 0:
         qty = min(qty, int(buying_power / ref))
@@ -379,7 +491,9 @@ def open_position(client: AlpacaClient, post, a: dict, equity: float,
         except Exception:                                          # noqa: BLE001
             pass
 
-    size_note = (f"risk ${risk_dist * qty:,.0f} ({config.COPY['max_risk_pct']:.1%} cap), "
+    size_note = (f"risk ${risk_dist * qty:,.0f} "
+                 f"({config.COPY['max_risk_pct']:.1%}"
+                 f"{f' x {risk_mult:g}, mention-sized' if risk_mult < 0.999 else ''} cap), "
                  f"notional ${ref * qty:,.0f} ({ref * qty / equity:.0%} of equity)")
 
     if not live:
@@ -627,12 +741,17 @@ def run(dry_run: bool = False, handle: str | None = None) -> None:
     actionable.reverse()
     for row in actionable:
         age = _age_min(row["posted_at"] or row["seen_at"])
-        if age is None or age > float(config.COPY.get("max_signal_age_min", 720)):
+        # A mention is a weaker signal, so it also goes stale sooner: what he was
+        # interested in last week is not what he is interested in now.
+        age_key = ("mention_max_age_min" if str(row["kind"]) == "interest"
+                   else "max_signal_age_min")
+        max_age = float(config.COPY.get(age_key, 720))
+        if age is None or age > max_age:
             db.set_x_post(row["post_id"], state="rejected",
                           reason=f"too old to mirror ({age if age is None else round(age)} min)")
             db.log_event(ACCOUNT, STRATEGY, "no_go",
                          f"Ignored his {row['kind']} signal for {row['symbol']} — it is "
-                         f"{round(age or 0)} min old")
+                         f"{round(age or 0)} min old (limit {round(max_age)} min)")
             continue
         if row["kind"] == "close":
             if not market_open:
@@ -669,30 +788,49 @@ def run(dry_run: bool = False, handle: str | None = None) -> None:
             continue
 
         # entry
-        if not market_open:
-            db.log_event(ACCOUNT, STRATEGY, "skip",
-                         f"Holding his {row['symbol']} call until the market opens",
-                         detail=row["url"], dedup=True)
-            continue
         try:
             a = json.loads(row["analysis_json"] or "{}")
         except (json.JSONDecodeError, TypeError):
             a = {}
-        # Re-alert on a gate refusal only when the reason changes, so an
-        # all-day block does not bury the journal.
-        state, reason = open_position(dclient, row, a, equity, buying_power,
-                                      positions, live and not dry_run)
-        db.set_x_post(row["post_id"], state=state, reason=reason)
-        if state == "done":
-            positions[str(a.get("symbol") or "").upper()] = {"symbol": a.get("symbol")}
-        elif state == "rejected":
-            # Not "go": say plainly why we are not following him this time.
-            if not any(str(e["reason"] or "").startswith(reason[:40])
-                       for e in db.recent_events(5, account=ACCOUNT)):
-                db.log_event(ACCOUNT, STRATEGY, "no_go",
-                             f"Did not follow his {row['symbol']} call — {reason}",
-                             detail=row["url"])
-            print(f"[copy] rejected {row['symbol']}: {reason}")
+        syms = _entry_symbols(row, a)
+        if not syms:
+            db.set_x_post(row["post_id"], state="review",
+                          reason="no tradable ticker to act on")
+            continue
+        if not market_open:
+            db.log_event(ACCOUNT, STRATEGY, "skip",
+                         f"Holding his {', '.join(syms)} call until the market opens",
+                         detail=row["url"], dedup=True)
+            continue
+        risk_mult = _entry_risk_mult(row["kind"])
+        results = []
+        for sym in syms:
+            per = dict(a, symbol=sym, risk_mult=risk_mult)
+            st, rs = open_position(dclient, row, per, equity, buying_power,
+                                   positions, live and not dry_run)
+            results.append((sym, st, rs))
+            if st == "done":
+                positions[sym] = {"symbol": sym}
+        acted = [s for s, st, _ in results if st == "done"]
+        # Which names were actually entered, recorded so the shadow book (and
+        # anyone reading the row) sees positions rather than his reading list.
+        a["acted"] = acted
+        db.set_x_post(row["post_id"], analysis_json=json.dumps(a))
+        if acted:
+            db.set_x_post(row["post_id"], state="done",
+                          reason="; ".join(rs for _, _, rs in results))
+        else:
+            state = results[0][1]
+            reason = "; ".join(f"{s}: {r}" for s, _, r in results)
+            db.set_x_post(row["post_id"], state=state, reason=reason)
+            if state == "rejected":
+                # Not "go": say plainly why we are not following him this time.
+                if not any(str(e["reason"] or "").startswith(reason[:40])
+                           for e in db.recent_events(5, account=ACCOUNT)):
+                    db.log_event(ACCOUNT, STRATEGY, "no_go",
+                                 f"Did not follow his {row['symbol']} call — {reason}",
+                                 detail=row["url"])
+                print(f"[copy] rejected {row['symbol']}: {reason}")
 
     print(f"[copy] cycle done (equity={equity:,.2f}, "
           f"{len(positions)} mirrored position(s))")
@@ -708,6 +846,25 @@ def _disposition(row, a: dict) -> tuple[str, str]:
             return "review", ("the position is only in the attached image — "
                               f"{a['reason']}")
         return "review", a["reason"]
+    if kind == "interest":
+        # A name he likes is a weaker signal than a position he took, so it gets
+        # its own (lower) bar and its own size, and the reason says so — a reader
+        # must never have to guess whether a trade came from a call or a mention.
+        if not config.COPY.get("follow_mentions", True):
+            return "ignored", ("following the names he mentions is switched off "
+                               f"in the config ({a['reason']})")
+        if a.get("side") == "short":
+            # Long-only for mentions: "he is negative about X" is a view, not a
+            # name he is interested in, and shorting on a passing remark is two
+            # speculative steps stacked on each other.
+            return "ignored", ("he is not positive about "
+                               f"{', '.join(a.get('symbols') or [a['symbol']])} — "
+                               f"mentions are followed long only ({a['reason']})")
+        if a["confidence"] < float(config.COPY.get("mention_min_confidence", 0.45)):
+            return "ignored", (f"mention is too vague to act on "
+                               f"({a['confidence']:.0%}) — {a['reason']}")
+        return "open", (f"he named {', '.join(a.get('symbols') or [a['symbol']])} "
+                        f"without claiming a position — {a['reason']}")
     if a["confidence"] < float(config.COPY.get("min_confidence", 0.5)):
         return "ignored", (f"not confident enough to act ({a['confidence']:.0%}): "
                            f"{a['reason']}")

@@ -378,7 +378,23 @@ COPY = {
     # --- sizing (suggestions, tunable) -------------------------------------- #
     "max_position_pct": 0.25,   # max notional per mirrored position, % of equity
     "max_risk_pct": 0.01,       # max $ risk (entry->stop x qty) per position
-    "max_concurrent_positions": 3,
+    # Four rather than three because mentions arrive more often than stated
+    # positions, and a "names I like" post can carry two. Each one is still
+    # individually capped above, and mention-sized entries are half-sized, so the
+    # total exposure this can reach is LOWER than four full-size positions.
+    "max_concurrent_positions": 4,
+    # --- his weaker signal: instruments he names but has not traded ---------- #
+    # His real positions sit behind a paywall, so most of what he posts publicly
+    # is a name he is interested in rather than a position he took. That is still
+    # information, so it IS followed — but as a deliberately discounted signal:
+    # half the per-trade risk budget, a shorter shelf life, and only when the
+    # read is sure a real ticker was named. The stop is ours (ATR-derived), so
+    # what he meant by the mention cannot cost more than a mention is worth.
+    "follow_mentions": True,
+    "mention_size_mult": 0.5,    # fraction of the usual per-trade risk budget
+    "mention_min_confidence": 0.45,
+    "mention_max_symbols": 2,    # a "names I like" post can list several
+    "mention_max_age_min": 240,  # a mention goes stale faster than a position
     # --- stop / target derivation when the post does not state them ---------- #
     # A stop narrower than ~1x ATR sits inside ordinary noise. These are in ATR
     # units, so they adapt to each symbol's own volatility.
@@ -404,6 +420,10 @@ COPY_TUNE = {
     "atr_stop_mult": (1.0, 4.0),
     "atr_target_mult": (2.0, 8.0),
     "min_confidence": (0.3, 0.9),
+    "mention_size_mult": (0.25, 1.0),
+    "mention_min_confidence": (0.3, 0.8),
+    "mention_max_symbols": (1, 3),
+    "mention_max_age_min": (45, 720),
 }
 
 # --------------------------------------------------------------------------- #

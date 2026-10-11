@@ -442,7 +442,11 @@ def test_earnings_within_maps_rows_and_times():
     mc._nasdaq_day = lambda day: payload.get(day, [])
     out = mc.earnings_within(None, ["META", "NVDA", "AAPL", "SPY", "ZZZZ"], 10)
 
-    assert out["META"] == {"date": days[0].isoformat(), "in_days": 0,
+    # `in_days` is CALENDAR days from today (the code's own semantics), not the
+    # trading-day index: on a Saturday/Sunday days[0] is Monday, i.e. 2 or 1 days
+    # away, and asserting a flat 0 made this test fail every weekend.
+    assert out["META"] == {"date": days[0].isoformat(),
+                           "in_days": (days[0] - today).days,
                            "time": "after_close", "eps_forecast": "$6.12"}
     assert out["AAPL"]["time"] == "before_open" and out["AAPL"]["eps_forecast"] == "$1.35"
     assert out["NVDA"]["time"] == "unknown" and out["NVDA"]["eps_forecast"] is None
@@ -492,7 +496,13 @@ def test_context_for_llm_shape_and_degradation():
     assert ctx["symbols"]["META"]["last"] == 250.0
     assert ctx["symbols"]["BOOM"]["last"] is None    # never omitted silently
     assert ctx["earnings"]["META"] is not None
-    assert "earnings<=5d: META in 0d (after_close)" in ctx["text"]
+    # The earnings scan skips weekends, so on a Saturday or Sunday the first
+    # calendar day it can report is Monday. Asserting a flat "in 0d" made this
+    # test fail every weekend (it went red on Sunday 2026-10-11) — compute the
+    # first trading day the same way the code does.
+    today = datetime.now(ET).date()
+    offset = 0 if today.weekday() < 5 else (8 - today.weekday() - 1)
+    assert f"earnings<=5d: META in {offset}d (after_close)" in ctx["text"], ctx["text"]
     assert "{'sectors'}" not in ctx["text"]
 
     mc.clear_cache()

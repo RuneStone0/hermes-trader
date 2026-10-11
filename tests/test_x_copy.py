@@ -123,8 +123,11 @@ def _sql(stmt: str) -> None:
 
 
 def sig(kind="open", symbol="META", side="long", stop=None, target=None,
-        confidence=0.9, reason="he is long META", needs_media=False) -> dict:
-    return {"kind": kind, "symbol": symbol, "side": side, "stop": stop,
+        confidence=0.9, reason="he is long META", needs_media=False,
+        symbols=None) -> dict:
+    return {"kind": kind, "symbol": symbol,
+            "symbols": symbols if symbols is not None else ([symbol] if symbol else []),
+            "side": side, "stop": stop,
             "target": target, "confidence": confidence, "reason": reason,
             "needs_media": needs_media}
 
@@ -260,9 +263,14 @@ def test_open_path_floor() -> None:
 
     check("already holding the symbol is refused", chk(x_copy_run.open_position(
         c, p, sig(symbol="META"), 10000.0, 10000.0, {"META": {"symbol": "META"}}, False)))
-    three = {s: {"symbol": s} for s in ("AAA", "BBB", "CCC")}
+    # The cap itself is a tunable, so the test reads it rather than hard-coding a
+    # number: what must hold is that the cap binds, whatever the tuner sets it to.
+    cap = int(config.COPY["max_concurrent_positions"])
+    full_book = {chr(65 + i) * 3: {"symbol": chr(65 + i) * 3} for i in range(cap)}
     check("the concurrency cap is enforced", chk(x_copy_run.open_position(
-        c, p, sig(symbol="METAX".replace("X", "A")), 10000.0, 10000.0, three, False)))
+        c, p, sig(symbol="ZZZZ"), 10000.0, 10000.0, full_book, False)))
+    check("...and it is enforced at the configured number",
+          cap == len(full_book), f"cap={cap}")
     check("options and crypto never reached the broker", c.orders == [])
 
 
@@ -530,6 +538,160 @@ def test_a_close_we_do_not_follow_is_journaled() -> None:
     _sql("delete from x_posts")
 
 
+# --------------------------------------------------------------------------- #
+# 6b. Mentions: he names names but claims no position
+# --------------------------------------------------------------------------- #
+def test_mentions_are_followed_but_discounted() -> None:
+    print("mentions: followed at a discount, never at the size of a stated position")
+    _no_atr(2.0)
+    row = post(kind="interest")
+
+    # A clear mention is followed ...
+    state, reason = x_copy_run._disposition(row, sig(kind="interest", symbol="META",
+                                                    confidence=0.6))
+    check("a clear name he mentions is acted on", state == "open", reason)
+    check("...and the record says he claimed no position",
+          "without claiming a position" in reason and "META" in reason, reason)
+
+    # ... a vague one is not ...
+    state, reason = x_copy_run._disposition(row, sig(kind="interest", symbol="META",
+                                                    confidence=0.2))
+    check("a vague mention is dropped", state == "ignored", reason)
+
+    # ... and a stated position is held to the HIGHER bar, not this one.
+    state, _ = x_copy_run._disposition(row, sig(kind="open", symbol="META",
+                                               confidence=0.45))
+    check("the lower mention bar does not leak into stated positions",
+          state == "ignored", "a 45% read of a stated position must not open a trade")
+
+    # The switch turns the whole behaviour off.
+    config.COPY["follow_mentions"] = False
+    try:
+        state, reason = x_copy_run._disposition(row, sig(kind="interest", symbol="META",
+                                                         confidence=0.9))
+        check("mentions can be switched off entirely", state == "ignored", reason)
+    finally:
+        config.COPY["follow_mentions"] = True
+
+    check("a mention is sized at half the usual risk budget",
+          x_copy_run._entry_risk_mult("interest") == float(config.COPY["mention_size_mult"]),
+          str(x_copy_run._entry_risk_mult("interest")))
+    check("a stated position is sized normally",
+          x_copy_run._entry_risk_mult("open") == 1.0)
+
+    # A name he is NEGATIVE about is a view, not a name he wants. Shorting on a
+    # passing remark would stack two speculative steps on top of each other, and
+    # the live ledger proved it matters: "trading $SNAP is masochism" is exactly
+    # the shape of post that must never become a trade.
+    state, reason = x_copy_run._disposition(
+        row, sig(kind="interest", symbol="SNAP", side="short", confidence=0.9))
+    check("a bearish or mocking mention is not traded", state == "ignored", reason)
+    check("...and the record says why", "long only" in reason, reason)
+
+    # The SAME rules still bind: half size is not a licence to skip the stop.
+    _no_atr(None)
+    check("a mention with no measurable volatility is still refused",
+          x_copy_run.open_position(FakeClient(), post(kind="interest"),
+                                   {**sig(kind="interest", stop=None), "risk_mult": 0.5},
+                                   10000.0, 10000.0, {}, False)[0] == "rejected")
+    _no_atr(2.0)
+
+    # Half size, measured: the same trade at two budgets.
+    _sql("delete from trades")
+    c1, c2 = FakeClient(price=100.0), FakeClient(price=100.0)
+    x_copy_run.open_position(c1, post(), sig(stop=96.0, target=112.0),
+                             10000.0, 10000.0, {}, False)
+    full = db.recent_events(1, account="copy")[0]["detail"]
+    x_copy_run.open_position(c2, post(kind="interest"),
+                             {**sig(kind="interest", stop=96.0, target=112.0),
+                              "risk_mult": 0.5}, 10000.0, 10000.0, {}, False)
+    half = db.recent_events(1, account="copy")[0]["detail"]
+    check("the mention trade is journaled as mention-sized",
+          "mention-sized" in half, half[:160])
+    check("...and it is not journaled the same as a full-size one",
+          "mention-sized" not in full, full[:160])
+
+    # Compare the RISK actually journaled, not a hard-coded dollar figure: whole
+    # shares round, so half the budget is not exactly half the dollars.
+    def _risk(detail: str) -> float:
+        return float(detail.split("risk $")[1].split(" ")[0].replace(",", ""))
+
+    check("a mention risks about half what a stated position risks",
+          _risk(half) <= 0.6 * _risk(full), f"mention ${_risk(half)} vs full ${_risk(full)}")
+    _sql("delete from trades")
+
+
+def test_mention_parsing_and_caps() -> None:
+    print("mentions: several names per post, capped, and the book tracks only what was taken")
+    # The model returns a list; the parser keeps the valid ones, in his order.
+    out = x_copy_run._clean_analysis({
+        "kind": "interest", "symbols": ["meta", "AAPL", "SPX", "", "NVDA"],
+        "symbol": "meta", "side": "", "confidence": 0.7, "reason": "likes these"})
+    check("tickers are normalised and de-duplicated",
+          out["symbols"][:2] == ["META", "AAPL"], str(out["symbols"]))
+    check("an index symbol is not a tradable ticker here", "SPX" not in out["symbols"])
+    check("the first name is exposed as the single-name symbol", out["symbol"] == "META")
+    check("a named interest leans long by default", out["side"] == "long")
+
+    # Caps: one post cannot fill the whole book.
+    row = post(kind="interest")
+    a = sig(kind="interest", symbol="META", symbols=["META", "AAPL", "NVDA"])
+    got = x_copy_run._entry_symbols(row, a)
+    check("only the configured number of names is acted on per post",
+          len(got) == int(config.COPY["mention_max_symbols"]), str(got))
+    check("...and they are his order, not alphabetical", got == ["META", "AAPL"], str(got))
+
+    # A stated position takes exactly one name, whatever the list says.
+    check("a stated position acts on one symbol only",
+          x_copy_run._entry_symbols(post(kind="open"),
+                                    sig(kind="open", symbol="META",
+                                        symbols=["META", "AAPL"])) == ["META"])
+
+    # The shadow book holds the positions TAKEN, not his reading list.
+    _sql("delete from x_posts")
+    db.upsert_x_post("m1", "fullportnik", posted_at="2026-09-01T10:00:00Z",
+                     text="names I like: META and AAPL")
+    db.set_x_post("m1", state="done", kind="interest", symbol="META",
+                  analysis_json=json.dumps({"kind": "interest",
+                                            "symbols": ["META", "AAPL"],
+                                            "acted": ["META"]}))
+    book = x_copy_run.shadow_book()
+    check("the book holds what was entered", "META" in book, str(list(book)))
+    check("...and not a name that was only mentioned", "AAPL" not in book, str(list(book)))
+    _sql("delete from x_posts")
+
+
+# --------------------------------------------------------------------------- #
+# 3b. The feed's read of a post, with the real posts it got wrong
+# --------------------------------------------------------------------------- #
+def test_clean_analysis_matches_the_live_posts() -> None:
+    """The classifier's rules, pinned to posts this account actually published.
+
+    Every case here is a real post from the live feed (see the journal for the
+    week of 2026-09-29, when 28 of 31 posts were correctly 'none'). The classifier
+    runs in the bot, not in the tests, but the SHAPE it must produce is fixed
+    here: a ticker alone is not an interest, and a bearish mention is not long.
+    """
+    print("live posts: what counts as a name he is interested in")
+    # Ticker mentioned as past performance -> not an interest (the model must not
+    # be able to turn this into an entry by naming it).
+    out = x_copy_run._clean_analysis({"kind": "none", "symbols": ["META", "MSFT"],
+                                      "confidence": 0.3, "reason": "past rally"})
+    check("a commentary post that cites tickers stays 'none'", out["kind"] == "none")
+    # A bearish mention is a view, not interest: the side is what the bot reads.
+    out = x_copy_run._clean_analysis({"kind": "interest", "symbols": ["SNAP"],
+                                      "side": "short", "confidence": 0.8,
+                                      "reason": "masochism joke"})
+    check("a negatively-framed name keeps its bearish side", out["side"] == "short")
+    check("...and would be refused as a mention",
+          x_copy_run._disposition(post(kind="interest"), out)[0] == "ignored")
+    # A genuine forward-looking interest.
+    out = x_copy_run._clean_analysis({"kind": "interest", "symbols": ["amd"],
+                                      "confidence": 0.7, "reason": "watching AMD"})
+    check("a genuine forward-looking name is an interest", out["kind"] == "interest")
+    check("...and is actioned", x_copy_run._disposition(post(kind="interest"), out)[0] == "open")
+
+
 def main() -> None:
     for fn in (test_feed_never_confuses_failure_with_silence,
                test_feed_validation,
@@ -538,6 +700,9 @@ def main() -> None:
                test_sizing_is_ours_not_his,
                test_reading_posts,
                test_dispositions,
+               test_mentions_are_followed_but_discounted,
+               test_mention_parsing_and_caps,
+               test_clean_analysis_matches_the_live_posts,
                test_shadow_mode_places_nothing,
                test_shadow_book_replay,
                test_re_reads_are_inert,

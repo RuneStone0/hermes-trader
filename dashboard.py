@@ -1344,18 +1344,24 @@ def _account_body(account: str) -> str:
     if account == "copy" and not live:
         # There is no broker account, so a portfolio value, a P/L and an equity
         # curve would be a row of dashes and zeroes — noise, not information.
-        # These four cards say what this bot actually did instead, and they use
-        # the same card, the same tooltip and the same grid as every other page.
+        # These cards say what this bot actually did instead, and they use the
+        # same card, the same tooltip and the same grid as every other page.
         posts = db.x_posts(limit=1000)
-        n_sig = sum(1 for p in posts if str(p["kind"] or "none") != "none")
+        kinds = [str(p["kind"] or "none") for p in posts]
+        n_stated = sum(1 for k in kinds if k in ("open", "add", "close", "trim"))
+        n_mention = sum(1 for k in kinds if k == "interest")
         n_shadow = sum(1 for p in posts if p["state"] == "done")
         n_review = sum(1 for p in posts if p["state"] == "review")
         cards = "<div class='grid'>" + "".join([
             _card('His posts on file', str(len(posts)),
                   'originals only — replies are ignored',
                   desc='Every original post of his that the bot is holding, newest first. His replies are never read.'),
-            _card('Signals found', str(n_sig), 'posts that named a position',
-                  desc='Posts where he named an instrument and an action. The rest are commentary, market takes, or a profit screenshot.'),
+            _card('Positions he stated', str(n_stated),
+                  'he said he was in a trade',
+                  desc='Posts where he said he had taken, added to or exited a position. These are followed at the usual size.'),
+            _card('Names he mentioned', str(n_mention),
+                  'no position claimed — followed at half size',
+                  desc='Posts where he named instruments he likes or is watching without claiming a position. His real calls are behind a paywall, so these are the most common signal he posts: they are followed, but sized down and given a shorter shelf life.'),
             _card('Would-be trades', str(n_shadow),
                   'no broker account, so none were placed',
                   desc='Trades the bot sized and would have placed. In shadow mode the broker is never contacted: no order, no fill, no P&L.'),
