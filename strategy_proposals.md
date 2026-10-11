@@ -176,13 +176,20 @@ and skipped the event, so the record read "New post from @fullportnik: 'full
 ported $AMZN today…'" and then silence. Fixed; the regression test fails on the
 old code and passes on the new one.
 
-**PENDING (unevidenced, NOT deployed): give the copy reader eyes.** Both "full
-port play" posts carried the ticker only in the attached image, and the text
-reader correctly parks them as `review` rather than guessing. Turning image posts
-into signals requires an extraction measured for recall on a labelled set first —
-the same bar the text path had to clear (a 2–6-of-6 enumeration was rejected for
-this reason). A vision path that invents a ticker is worse than one that parks it.
-**No deploy without that measurement.**
+**PENDING, re-scoped by measurement (2026-10-11): give the copy reader eyes.**
+Both "full port play" posts carried the ticker only in the attached image, and
+the text reader correctly parks them as `review` rather than guessing. The
+existing feed **cannot** be extended to read them, and that is now measured
+rather than assumed: asked directly about that exact image post, the feed's
+search tool reports `image_present: true, image_readable: false` with the tool
+verifiably called (`usage: x_search_calls: 1, x_posts_fetched: 4`) — see
+`probes/probe_image_read.py`. It can see THAT media exists, not what is in it.
+The remaining path is the official X API (`attachments.media_keys` → media URLs,
+needs a paid bearer token) feeding a vision model, and it faces the SAME bar the
+text path had to clear: a recall measurement on a labelled set before it may
+trade. **No deploy without that measurement.** Note the scale of what is hidden:
+25 of the 31 posts in the live table carry media, so an image is the main place
+the actionable part of a post would sit.
 
 **Also fixed:** `tests/test_x_copy.py`'s reply check had been failing since
 2026-10-02 — it hard-coded 2026-09-28 timestamps and `_finish_posts` drops

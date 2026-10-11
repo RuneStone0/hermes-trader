@@ -128,6 +128,39 @@ invisible to the person reading the dashboard.** Audit a bot by counting the row
 it dispositioned against the lines it wrote; any gap is a silent drop. A
 regression test now pins it (`tests/test_x_copy.py`, fails on the old code).
 
+## 10. "The copy bot should read the ticker out of the attached image"
+
+**VERDICT: the path proposed is measured closed; the idea is not dead, its route
+changed.**
+
+Asked directly about the image-only post the reader parked as `review` (id
+`2104582454606799186`, "can't wait to blast all of this at my next full port
+play"), the feed's own search tool answers `image_present: true,
+image_readable: false` — with the tool verifiably called (`x_search_calls: 1`,
+`x_posts_fetched: 4`), so it is not a refusal to try. It can see that media
+exists; it cannot see what is in it. Probe: `probes/probe_image_read.py`.
+
+Scale of what that leaves on the floor: **25 of the 31 posts** in the live
+`x_posts` table carry media. For this account the image is not a corner case, it
+is the main place an actionable ticker would sit.
+
+Remaining route: the official X API returns `attachments.media_keys` and media
+URLs (paid bearer token), and those URLs can be handed to a vision model as an
+image input. That is a NEW source whose availability has to be proven, and it
+still faces the original bar — a recall measurement on a labelled set before it
+may trade, because a vision path that invents a ticker is worse than one that
+parks it. Until then an image-only post stays `review` with the reason saying so,
+which is what it does today.
+
+**Related measurement from the same investigation:** with the reader's rules
+tightened to see named interests (2026-10-11), re-reading all 31 live posts
+yields exactly **1** actionable post — 2026-10-05, "interesting names to maybe
+full port: $ORCL … $RDDT … $AMZN". The other 30 stay `none`, correctly: the
+mocking "trading $snap stock is literal masochism" is not a short, "sunset from
+the full port apartment" is not a signal, and a Druckenmiller quote is not a
+position. One in 31 is the honest rate for a source whose real calls are paid,
+and it is the reason the mention rules must not be loosened to manufacture more.
+
 ---
 
 Settled findings are also mirrored at
