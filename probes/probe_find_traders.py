@@ -137,18 +137,21 @@ def nnum(v, default: float = 0.0) -> float:
 
 def main() -> int:
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else 8
+    # An optional custom discovery question: the same harness is reused to ask a
+    # different question of the same corpus (live entries vs watchlists vs
+    # checkable records), because each question surfaces a different population.
+    custom = sys.argv[2] if len(sys.argv) > 2 else None
 
     print("PASS A — discovery (open search, not restricted to a handle)", flush=True)
-    found = ask(
+    found = ask(custom or (
         "Search X for accounts that post their own stock trades publicly and "
         "for free: they state entries and exits with tickers, show their "
         "position sizing or stops, and do NOT require a paid subscription to "
         "see the calls. Include a mix: some well known, some smaller. For each "
         "one, find at least one real post of theirs that states a ticker and an "
         "action, and give me its id and url. Also report any account that claims "
-        "a strong track record with visible results rather than just claims. "
-        f"Return up to {limit} accounts, best first.",
-        DISCOVERY_SYS)
+        f"a strong track record with visible results rather than just claims. "
+        f"Return up to {limit} accounts, best first."), DISCOVERY_SYS)
     cands = [c for c in (found.get("candidates") or []) if c.get("handle")]
     print(f"  {len(cands)} candidate(s): {[c.get('handle') for c in cands]}", flush=True)
     print(f"  notes: {str(found.get('search_notes'))[:300]}", flush=True)
@@ -175,8 +178,14 @@ def main() -> int:
         print(f"        {str(v.get('summary'))[:220]}", flush=True)
 
     out = {"discovery_notes": found.get("search_notes"), "candidates": dossier}
-    Path("/tmp/traders.json").write_text(json.dumps(out, indent=1))
-    print(f"\nwrote /tmp/traders.json ({len(dossier)} audited accounts)")
+    # Timestamped per pass: several passes over the same corpus ask DIFFERENT
+    # questions and return different populations, and the first version of this
+    # overwrote one pass's dossier with the next one's.
+    import time as _t
+    path = Path(f"/tmp/traders_{_t.strftime('%Y%m%d_%H%M%S', _t.gmtime())}.json")
+    path.write_text(json.dumps(out, indent=1))
+    Path("/tmp/traders_latest.json").write_text(json.dumps(out, indent=1))
+    print(f"\nwrote {path} ({len(dossier)} audited accounts)")
     return 0
 
 
