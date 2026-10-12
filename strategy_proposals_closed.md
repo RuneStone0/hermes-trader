@@ -163,6 +163,75 @@ and it is the reason the mention rules must not be loosened to manufacture more.
 
 ---
 
+## 11. "A closed loss worse than −1R means the stop was absent, late, or badly filled (execution defect)"
+
+**VERDICT: MEASURED 2026-10-12 — both >1R losses in the book are overnight gaps
+through a resting stop. Not a defect. Do not re-propose without a fill worse than
+the first trade printed beyond the stop.**
+
+Two trades in 23 closed rows lost more than one risk unit, and both were carried
+overnight:
+
+* **SLV 2026-09-09→10, −1.74R** (closed already in item 7: MFE +0.451R / MAE
+  −1.902R, a 0.802-ATR stop).
+* **NVDA 2026-10-06→08, −1.26R.** Entry 242.03, stop 235.74696, exit 234.1275.
+  Measured from the feed's own 5-min bars: the last print of the 2026-10-07
+  session was **237.42**, and the first 5-min bar of 2026-10-08 **opened at
+  234.795** — already 0.95 below the stop — with the bar low 233.87. The fill at
+  234.1275 is *inside* that first bar and better than its low, so the resting stop
+  did what a resting stop can do; the gap is the cost. NVDA's measured MFE is
+  +0.102R: the trade never worked, and no exit rule could have saved it.
+
+Cost of the gap class, measured: 0.74R (SLV beyond −1R) + 0.26R (NVDA) =
+**1.00R of the book's −5.46R total = 18.3% of all YOLO losses**. That is the price
+of the overnight hold the user explicitly enabled — the real mitigation is position
+size into a known event window (which the event guard already halves), not a wider
+stop. Probe: `probes/probe_week2_2026-10-12.py`.
+
+## 12. "Gate long entries away from the top of the instrument's 20-day range (YOLO buys the high)"
+
+**VERDICT: TESTED 2026-10-12 ON 35,701 SYMBOL-SESSIONS — NOT SUPPORTED. The
+effect does not exist at scale. Do not deploy; do not re-propose without a new
+mechanism.**
+
+Why it was worth testing: this was the ONLY entry-side feature that separated the
+live YOLO book's winners from its losers. In-range position = (entry − 20d low) /
+(20d high − 20d low), measured per closed trade from daily bars
+(`probes/probe_entry_quality.py`): the 4 winners' median was **0.60**, the 15
+losers' **0.83**; and the five entries taken at **≥0.90 of the range went 0 for 5,
+sum −3.59R, avg −0.72R**, against avg −0.13R for the other 14. All five of those
+top-decile entries also failed to reach +1R MFE. Suspicious-looking — and n=5.
+
+The mechanism, tested properly (`backtest_mr.py --range-study`, report
+`reports/range_position_2026-10-12.md`; mechanical long at each session close,
+2.5×ATR14 stop, 2:1 target, 10-bar horizon, stop resolved before target, 19-ETF
+universe, bars through 2026-09-25):
+
+| in-range bucket | n | med MFE R | MFE≥1R | avg R | win% |
+|---|---|---|---|---|---|
+| <0.2 | 5513 | +0.72 | 1789/5513 | +0.151 | 57.6% |
+| 0.2–0.4 | 5182 | +0.64 | 1445/5182 | +0.096 | 53.9% |
+| 0.4–0.6 | 5481 | +0.62 | 1506/5481 | +0.089 | 54.2% |
+| 0.6–0.8 | 6946 | +0.65 | 1921/6946 | +0.114 | 55.5% |
+| 0.8–0.9 | 5030 | +0.66 | 1435/5030 | +0.146 | 57.6% |
+| ≥0.9 (top decile) | 7549 | +0.61 | 1942/7549 | +0.116 | 56.4% |
+
+Entries at ≥0.90 of range: **+0.116R** (n=7549). Entries below 0.90: **+0.119R**
+(n=28152). Difference **−0.002R, Welch t=−0.21, 95% bootstrap CI
+[−0.023, +0.019]** — straddles zero. Restricted to up-trend sessions (close >
+SMA50 and SMA50 rising, the tape YOLO actually selects): +0.104R (n=6248) vs
++0.097R (n=13697), difference **+0.007R, t=+0.53, CI [−0.019, +0.033]** — also
+straddles zero. Median MFE is flat (0.61–0.72R) in every bucket.
+
+Conclusion: **buying near the 20-day high is not the defect; the live 0-for-5 was
+noise** (P(0 wins in 5 | the book's 32% win rate) = 14.5%). Recording it here so
+next week's review does not re-derive it from the same 19 rows. The real open
+question is unchanged and unnamed by any feature measured so far: what makes
+YOLO's 6-of-19 entries reach +1R MFE at all. Caveat carried by the study:
+forward windows overlap, so the effective sample is far below the nominal n.
+
+---
+
 Settled findings are also mirrored at
 `/data/trading/strategy_proposals_closed.md` inside the `hermes-trader`
 container — that volume copy is the one the nightly routine reads.

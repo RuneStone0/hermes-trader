@@ -201,3 +201,91 @@ geometry (5/16 now), and whether QQQ (MFE +1.816R, MAE +0.001R — never went
 adverse) reaches its target or gives the profit back. Two good closes are not a
 trend and 16 trades is not 30.
 
+
+---
+
+## 2026-10-12 12:05 UTC — WEEKLY REVIEW (week of 2026-10-05 → 10-09)
+
+**Books in R and against SPY buy-and-hold.** SPY 774.97 (10-05 close) → 778.51
+(10-09 close) = **+0.46%** for the week; 764.16 (2026-09-08, the bots' first
+session) → 778.51 = **+1.88%** since go-live. Every number below is program output
+from the live container's trade DB and broker API (`probes/probe_week_2026-10-12.py`,
+`probe_week2_2026-10-12.py`, `probe_entry_quality.py`).
+
+| book | closed this week | week R | week net $ | equity over the week | all-time R (n) | vs SPY since 09-08 |
+|---|---|---|---|---|---|---|
+| yolo | 3 — QQQ **+2.23R** (target), NVDA −1.26R (stop), SMH −1.00R (stop) | **−0.03R** | −$27.86 | 9927.31 → 9887.72 = **−0.40%** | **−5.46R (19)** | −1.12% vs +1.88% = **−3.00pp** |
+| mr_rsi2 (daily acct) | 1 — XLV **+0.46R** (LLM close) | **+0.46R** | +$15.86 | 10030.84 → 10039.25 = **+0.08%** | +0.79R (3) | +0.39% vs +1.88% = −1.49pp |
+| daily_orb | 0 — 9 × `no_go`, 4 × `skip` in 21 days | — | — | — | +0.21R (1) | — |
+| weekly_pullback | 0 — ran every weekday 14:45, never triggered | — | — | 10000.00 flat | — | 0.00% |
+| x_copy | 0 — shadow (no broker account); 9 posts read, all "no trade" | — | — | — | — | — |
+
+YOLO's week was **flat in R** (−0.03R) and −0.86pp behind buy-and-hold; its equity
+moved more than its closed trades because four positions were held through the week
+(all four in modest profit at Friday's close: MSFT +$18.31, XLE +$6.79, XLV +$2.98,
+AMZN +$0.69).
+
+**Classification: (b) sample too small to tell.** Four closed trades this week
+(3 YOLO + 1 MR) and 19 lifetime YOLO trades against the 30-trade gate. The
+arithmetic says the book is *sitting on its own break-even line*, not that it has
+no edge: YOLO's realised avg win is **+1.760R** and avg loss **−0.833R**, so it
+needs a **32.1%** win rate to break even and has realised **21.1%** — and
+P(≤4 wins in 19 | p=0.321) = **21.9%**, i.e. entirely ordinary variance for a
+genuinely profitable 2:1 system. Not (a): the tape was a trend tape (SPY above its
+20d, +0.46% for the week) and the one evidenced sleeve printed +0.46R. Not (c): the
+two defect-shaped items were both audited and both cleared (below).
+
+**The measurement that mattered this week — it killed a proposal before it cost
+anything.** The only entry-side feature separating YOLO's winners from its losers
+was *where in its own 20-day range the entry sat*: winners' median **0.60**, losers'
+**0.83**, and the five entries taken at **≥0.90 of the range went 0 for 5, −3.59R**.
+Tested properly at scale (`backtest_mr.py --range-study`, report
+`reports/range_position_2026-10-12.md`, 19-ETF universe, **35,701 symbol-sessions**):
+entries at ≥0.90 of range **+0.116R** vs **+0.119R** below it — difference
+**−0.002R, Welch t=−0.21, 95% CI [−0.023, +0.019]**, straddling zero; flat in
+up-trend sessions too (+0.007R, t=+0.53). **The live 0-for-5 was noise**
+(P = 14.5%). Verdict filed as settled finding #12 so it is not re-derived from the
+same 19 rows. This is the fourth time the range/RS family of entry gates has been
+tested and the fourth time it has come back empty — the entry-quality problem is
+real but it is not visible in any of the features measured so far.
+
+**Audits performed (both clean, both now settled findings):**
+
+* **NVDA −1.26R is an overnight gap, not a bad fill** (settled finding #11). The
+  2026-10-07 session closed at 237.42; the first 5-min bar of 2026-10-08 opened at
+  **234.795**, already below the 235.747 stop, and the fill at 234.1275 was inside
+  that bar and better than its low. Both >1R losses in the book (SLV −1.74R, NVDA)
+  are this class, and they cost **1.00R = 18.3%** of all YOLO losses — the measured
+  price of the overnight hold, which the user enabled on purpose.
+* **The copy bot's journal-drop defect has NOT regressed.** 19 `x_posts` rows
+  against **19** disposition journal lines since the `bdef56d` fix; the single
+  remaining row/line gap in the table is the historical pre-fix 2026-10-01 row.
+* **Protection intact on every position.** All five open positions (MSFT, XLE, XLV,
+  AMZN, SMH) carry a live `held` stop leg at the recorded stop plus a `new` limit
+  target, and there are no live orders on flat symbols. Read with `orders_all()`
+  — bracket legs are `held`, so `?status=open` would have shown none of them.
+
+**What was changed: nothing in the strategies, and that is the verdict.** No
+parameter may be tuned below the 30-closed-trade gate (YOLO 19, MR 3, ORB 1,
+weekly 0), and no structural change earned deployment: the one candidate this week
+died on its own backtest (above). Noise control matters more than activity — the
+alternative was a YOLO entry filter built on five trades.
+
+**Watch next week:** (1) whether YOLO's 6-of-19 ≥+1R-MFE rate holds as the book
+grows past 20 — that number, not the P&L, is what decides whether the entry rule
+works; (2) MSFT, open 12 sessions, MFE +0.89R, still under its 560.16 target;
+(3) the two X posts parked `review` since 2026-09-29/30 whose tickers exist only in
+an image — unchanged and still correctly parked.
+
+**Process note (measured, not a defect):** the nightly `self_improve` routine has
+produced **0 lessons and 0 proposals on 10 consecutive runs** (2026-09-28 →
+2026-10-09: `[improve] appended 0 lessons; Auto-tuned 0 setting(s); 0 structural
+proposal(s) left for review`, from `/data/logs/self_improve.log`). It is running,
+calling the model, and returning empty — most likely the settled-findings list
+doing its job plus the sample gate blocking every apply. The consequence is that
+`lessons_learned.md` has not been appended since **2026-09-25**, so every bot's
+prompt still carries September-era lessons and this weekly review is currently the
+only source of new thinking. Not changed here: forcing the model to emit lessons
+risks polluting the live prompts with filler nightly. If the next review still
+shows an empty loop, the fix is to make an empty result a *journaled* event so the
+streak is visible on the dashboard rather than buried in a log file.

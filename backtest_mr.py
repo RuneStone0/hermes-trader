@@ -735,6 +735,125 @@ MAIN_HEADERS = ["variant", "n", "win%", "avgR", "totR", "totR/1%expo", "hold", "
 
 
 # --------------------------------------------------------------------------- #
+# study: does the entry's position inside its own 20-day range predict
+# follow-through? (2026-10-12 weekly review)
+# --------------------------------------------------------------------------- #
+def study_range_position(daily: dict[str, list[dict]], horizon: int = 10,
+                         rr: float = 2.0) -> str:
+    """Bucket every session of the universe by where the close sits in its own
+    20-day high/low range, then measure the forward excursion and the realised R
+    of a mechanical long taken at that close with the deployed stop convention
+    (2.5 x ATR14, 2:1 target, 10-bar horizon, stop resolved before target).
+
+    WHY: the live YOLO book's only measurement that separates its 4 winners from
+    its 15 losers is where the entry sits in the range (winners' median in-range
+    position 0.60, losers' 0.83; the five entries at >=0.90 of the range are 0
+    for 5, -3.59R). n=5 proves nothing, so the mechanism is tested here on 7.7
+    years of the deterministic universe instead of on 19 live trades.
+
+    CAVEAT: windows overlap (a session is an "entry" and also inside the forward
+    window of the previous ones), so the EFFECTIVE sample is far below n and the
+    t-statistics below are optimistic floors, not honest p-values.
+    """
+    rows: list[tuple] = []   # in_range, mfe, mae, realizedR, sym, regime
+    for sym in UNIVERSE:
+        bars = daily.get(sym) or []
+        if len(bars) < 300:
+            continue
+        closes = [b["c"] for b in bars]
+        highs = [b["h"] for b in bars]
+        lows = [b["l"] for b in bars]
+        a = atr(bars, ATR_PERIOD)
+        sma50 = sma(closes, 50)
+        for i in range(20 + ATR_PERIOD, len(bars) - horizon - 1):
+            if not a[i] or a[i] <= 0 or not sma50[i] or not sma50[i - 5]:
+                continue
+            hi20, lo20 = max(highs[i - 19:i + 1]), min(lows[i - 19:i + 1])
+            rng = hi20 - lo20
+            if rng <= 0:
+                continue
+            in_range = (closes[i] - lo20) / rng
+            risk = MR_STOP_ATR * a[i]
+            target = closes[i] + rr * risk
+            stop = closes[i] - risk
+            realized = None
+            for j in range(i + 1, i + 1 + horizon):
+                if lows[j] <= stop:            # stop resolved before target
+                    realized = -1.0
+                    break
+                if highs[j] >= target:
+                    realized = rr
+                    break
+            fh = max(highs[i + 1:i + 1 + horizon])
+            fl = min(lows[i + 1:i + 1 + horizon])
+            mfe = (fh - closes[i]) / risk
+            mae = (fl - closes[i]) / risk
+            if realized is None:
+                realized = (closes[i + horizon] - closes[i]) / risk
+            uptrend = closes[i] > sma50[i] and sma50[i] > sma50[i - 5]
+            rows.append((in_range, mfe, mae, realized, sym, "up" if uptrend else "down"))
+
+    def block(sel, title):
+        if not sel:
+            return [f"### {title}\n\nno rows", ""]
+        cuts = [(None, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 0.9),
+                (0.9, 1.0001), (1.0001, None)]
+        out = [f"### {title} (n={len(sel)})", "",
+               "| in-range bucket | n | med MFE R | MFE>=1R | avg R | win% |",
+               "|---|---|---|---|---|---|"]
+        for lo, hi in cuts:
+            g = [r for r in sel if (lo is None or r[0] >= lo)
+                 and (hi is None or r[0] < hi)]
+            if not g:
+                continue
+            label = (f"<{hi:g}" if lo is None else
+                     f">={lo:g}" if hi is None else f"{lo:g}-{hi:g}")
+            mfes = sorted(x[1] for x in g)
+            med = mfes[len(mfes) // 2]
+            out.append("| %s | %d | %+.2f | %d/%d | %+.3f | %.1f%% |" % (
+                label, len(g), med,
+                sum(1 for x in g if x[1] >= 1.0), len(g),
+                sum(x[3] for x in g) / len(g),
+                100.0 * sum(1 for x in g if x[3] > 0) / len(g)))
+        top = [x for x in sel if x[0] >= 0.9]
+        rest = [x for x in sel if x[0] < 0.9]
+        if top and rest:
+            ta = [x[3] for x in top]
+            rb = [x[3] for x in rest]
+            t = welch_t(ta, rb)
+            ci = bootstrap_diff(ta, rb, iters=4000)
+            lo_ci, hi_ci = ci if ci else (None, None)
+            out += ["", "- entries at >=0.90 of range: n=%d avgR=%+.3f  (MFE>=1R %d/%d)" % (
+                        len(ta), sum(ta) / len(ta), sum(1 for x in top if x[1] >= 1.0), len(top)),
+                    "- entries below 0.90        : n=%d avgR=%+.3f  (MFE>=1R %d/%d)" % (
+                        len(rb), sum(rb) / len(rb), sum(1 for x in rest if x[1] >= 1.0), len(rb)),
+                    "- difference %+.3fR, Welch t=%s, 95%% bootstrap CI [%s, %s]" % (
+                        sum(ta) / len(ta) - sum(rb) / len(rb),
+                        "n/a" if t is None else "%+.2f" % t,
+                        "n/a" if lo_ci is None else "%+.3f" % lo_ci,
+                        "n/a" if hi_ci is None else "%+.3f" % hi_ci),
+                    ""]
+        return out
+
+    md = ["# Study: entry position in the 20-day range vs forward follow-through",
+          "",
+          "*Generated %s by `backtest_mr.py --range-study` (stdlib only; every number is program output).*"
+          % datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+          "",
+          "Mechanical long at each session close (universe of %d ETFs), stop = 2.5x ATR14, "
+          "target = %.1fx risk, horizon %d sessions, stop resolved before target, fees/slippage "
+          "not applied (this measures EXCURSION, not a tradable equity curve)." % (
+              len(UNIVERSE), rr, horizon),
+          "",
+          "Overlapping windows: the same session appears in the forward window of earlier rows, "
+          "so the effective sample is far smaller than n and the t below is optimistic.",
+          ""]
+    md += block(rows, "All sessions")
+    md += block([r for r in rows if r[5] == "up"], "Sessions in an up-trend (close > SMA50, SMA50 rising)")
+    return "\n".join(md) + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 def main() -> None:
@@ -747,8 +866,27 @@ def main() -> None:
     ap.add_argument("--start", default="2019-01-01")
     ap.add_argument("--slip-bps", type=float, default=SLIP_BPS)
     ap.add_argument("--bootstrap", type=int, default=10_000)
+    ap.add_argument("--range-study", action="store_true",
+                    help="run only the entry-position-in-range study and write "
+                         "reports/range_position_<date>.md")
+    ap.add_argument("--range-out", default=None)
     args = ap.parse_args()
     SLIP_BPS = args.slip_bps
+
+    if args.range_study:
+        if args.fetch:
+            from alpaca_rest import AlpacaClient
+            cache = fetch_live(AlpacaClient("daily"), UNIVERSE + ["SPY"], args.start)
+        else:
+            cache = json.loads(Path(args.cache).read_text())
+        daily = {s: norm(cache["daily"][s]) for s in UNIVERSE if s in cache.get("daily", {})}
+        text = study_range_position(daily)
+        dest = args.range_out or (
+            "reports/range_position_%s.md" % datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        Path(dest).write_text(text)
+        print(text)
+        print("[study] written to %s" % dest)
+        return
 
     if args.fetch:
         from alpaca_rest import AlpacaClient
