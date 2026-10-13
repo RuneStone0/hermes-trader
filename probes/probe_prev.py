@@ -15,6 +15,13 @@ KEY = env["XAI_API_KEY"]
 HANDLE = "fullportnik"
 NEWEST = "2104582454606799186"      # known newest original post
 EXPECT = "2104270654493122840"      # the one before it (2026-09-27T18:03:14Z)
+# NOTE (2026-10-13): EXPECT is published the PREVIOUS day, and the query below
+# bounds the search with `until:2026-09-28` — which X treats as EXCLUSIVE, so it
+# cannot return a same-day post at all. This harness therefore could not tell a
+# real backward step from the exclusive-`until` artifact, and its 3/3 "correct"
+# result validated a query that skips every post of the cursor's own day (the
+# live walk was stepping back a full day at a time). Any re-run must use a
+# cursor whose true predecessor is published the SAME day.
 
 SYS = ("You are a fact extractor. You MUST call the x_search tool and report only "
        "what it returned. Never invent a post id. If the tool does not show you the "

@@ -13,8 +13,18 @@ Measured on 2026-09-29 against a real handle with 6 posts in a 4-day window:
     same 6 posts on four consecutive runs. Unusable as a trigger: it silently
     loses posts, and it loses them randomly.
   * "what is the most recent original post?" was correct on 5 of 5 runs.
-  * "which post came immediately before post <id>?" was correct 3 of 3.
+  * "which post came immediately before post <id>?" was correct 3 of 3 — but see
+    the `until:` note below: that harness (probes/probe_prev.py) asked about a
+    cursor whose expected predecessor was published the PREVIOUS day, so it
+    could not distinguish a real step back from the exclusive-`until` artifact
+    and validated a query that skips same-day posts.
   * "give me the verbatim text of post <id>" was correct 3 of 3.
+
+TRAP, measured live 2026-10-13: X's `until:` is EXCLUSIVE of the date it names,
+so `until:<the cursor's own day>` excludes every post of the cursor's day and
+returns the newest post of the PREVIOUS day — the walk silently skipped whole
+days and could walk out of the timeline entirely (that is the gap alert the
+watchdog saw). `_previous` now asks through the END of the cursor's day.
 
 So the feed never enumerates. It asks narrow, verifiable questions and walks the
 timeline one post at a time:
@@ -310,11 +320,23 @@ def _newest(handle: str, cli: XaiClient) -> dict | None:
 
 
 def _previous(handle: str, cursor: dict, cli: XaiClient) -> dict | None:
-    """The original post published immediately BEFORE `cursor`."""
-    day = str(cursor["posted_at"])[:10]
+    """The original post published immediately BEFORE `cursor`.
+
+    The `until:` bound is the END of the cursor's own day, not the day itself.
+    X's `until:` is EXCLUSIVE of the date it names, so `until:<cursor day>`
+    drops every post published that same day and answers with the newest post
+    of the PREVIOUS day: the walk then steps back a whole day at a time and
+    silently skips any post published between the cursor and our last poll
+    (measured 2026-10-13 from a 15:27Z post: `until:2026-10-13` returned the
+    10-12T19:37Z post, `until:2026-10-14` returned the true predecessor
+    10-13T14:24Z). The cursor's own id + timestamp already anchor the question,
+    so widening the bound costs nothing and cannot reach past the cursor.
+    """
+    day_end = (datetime.strptime(str(cursor["posted_at"])[:10], "%Y-%m-%d")
+               + timedelta(days=1)).strftime("%Y-%m-%d")
     r = cli.ask_post(
         f"Using the x_search tool with the keyword query "
-        f"'from:{handle} -filter:replies until:{day}' in Latest mode: which ORIGINAL "
+        f"'from:{handle} -filter:replies until:{day_end}' in Latest mode: which ORIGINAL "
         f"(non-reply) post by @{handle} was published IMMEDIATELY BEFORE the post "
         f"with id {cursor['id']} (published {cursor['posted_at']})? Give that "
         f"earlier post's id, exact UTC timestamp, verbatim text, whether it is a "
