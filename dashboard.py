@@ -478,8 +478,8 @@ def _when_tag(s: str, desc: str = "exact close time (UTC)") -> str:
 # self-heal on retry — rendered distinctly so they don't read as hard errors.
 _TRANSIENT_PATTERNS = (
     "clock unavailable", "urlerror", "name resolution", "timed out", "timeout",
-    "connection reset", "connection aborted", "temporarily", "http 500",
-    "http 502", "http 503", "http 504", "internal server error",
+    "connection reset", "connection aborted", "temporarily", "http 429",
+    "http 500", "http 502", "http 503", "http 504", "internal server error",
 )
 
 
