@@ -54,11 +54,6 @@ for r in con.execute(
         " ORDER BY created_at DESC LIMIT 40", (since,)):
     print(dict(r))
 
-print("\n=== x_posts disposition counts ===")
-for r in con.execute("SELECT state, COUNT(*) n FROM x_posts GROUP BY state"):
-    print(dict(r))
-print("x_posts total:", list(con.execute("SELECT COUNT(*) FROM x_posts"))[0][0])
-
 print("\n=== events, last 40 rows (all) ===")
 for r in con.execute(
         "SELECT created_at, strategy, decision, substr(reason,1,140) reason FROM events"

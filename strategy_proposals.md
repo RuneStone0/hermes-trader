@@ -176,6 +176,9 @@ and skipped the event, so the record read "New post from @fullportnik: 'full
 ported $AMZN today…'" and then silence. Fixed; the regression test fails on the
 old code and passes on the new one.
 
+**MOOT — CLOSED 2026-10-15: the whole sleeve was deleted (see the 2026-10-15 entry
+at the end of this file). Do not action this.**
+
 **PENDING, re-scoped by measurement (2026-10-11): give the copy reader eyes.**
 Both "full port play" posts carried the ticker only in the attached image, and
 the text reader correctly parks them as `review` rather than guessing. The
@@ -289,3 +292,44 @@ only source of new thinking. Not changed here: forcing the model to emit lessons
 risks polluting the live prompts with filler nightly. If the next review still
 shows an empty loop, the fix is to make an empty result a *journaled* event so the
 streak is visible on the dashboard rather than buried in a log file.
+
+---
+
+## 2026-10-15 — COPY FOLLOWER DELETED (decision, not a proposal)
+
+**Rune's decision, 2026-10-15 (relayed from the politiupdate profile): the
+copy-follower sleeve is REMOVED COMPLETELY — not paused, not shadowed, not
+re-scoped.** This is the disposition of the pending item "give the copy reader
+eyes": it is **MOOT and must not be actioned** (the paid X API read token it was
+waiting on is not to be bought), and nothing in this sleeve may be re-proposed
+without overturning the measurement below.
+
+Measurement that settled it (live 2026-10-15, from xAI's own console plus the
+running container):
+
+- The X feed (`xfeed.py` — the sole consumer of xAI's server-side `x_search` tool)
+  was the entire "X posts fetched" line on the xAI bill: **$21.33/week** at $0.005
+  per post fetched, plus **$6.79/week** of Grok tokens = **~$122/month**.
+- It polled 144x/day, 24/7 (deliberately not market-gated) and its poll question
+  carried no date bound, so a quiet poll re-fetched and re-paid for a post it
+  already held: **4,300 billed fetches/week bought ~21 genuinely new posts =
+  0.49% useful, ~$1.02 per captured post.**
+- It never traded: **shadow mode, no Alpaca account was ever configured for it** —
+  0 copy trades and 0 trade rows carrying a `signal_post_id`. No trading value was
+  lost by deleting it.
+- `X_BEARER_TOKEN` was unset, so it never used the official X API either
+  (`feed_state.last_provider = xai/trigger`), and xAI was already answering HTTP
+  429 `resource-exhausted` (2026-10-09, 10-14, 10-15).
+
+What was deleted: `xfeed.py`, `x_copy_run.py`, `config.COPY` / `COPY_TUNE` /
+`X_FEED`, the `x_feed` job in `app.py` (so the sleeve can never fire again), the
+`/signals` endpoint, the copy dashboard page and its account card, the `x_posts`
+and `feed_state` tables (dropped by migration; rows exported to
+`archive/x-copy-follower/`), the `x-post-watch` Hermes cron and its wrapper, the
+copy-only probes, and `tests/test_x_copy.py`. The daily / weekly / yolo / mr
+sleeves, their Alpaca accounts and their data were NOT touched.
+
+**Falsifier (what would justify re-opening it):** a captured post whose TEXT named
+an instrument, plus positive expectancy over >= 30 closed trades, at a measured
+cost per captured post under ~$0.05. Anything less is the same $122/month for the
+same 0.5%.

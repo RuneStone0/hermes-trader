@@ -269,8 +269,7 @@ def main() -> None:
 
     db.init_db()
     accounts = ([args.account] if args.account
-                else [a for a in ("daily", "weekly", "yolo", "copy")
-                      if a != "copy" or config.copy_account_configured()])
+                else [a for a in ("daily", "weekly", "yolo")])
     for a in accounts:
         try:
             selfheal_account(a, dry_run=args.dry_run)

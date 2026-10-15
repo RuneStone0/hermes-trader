@@ -18,17 +18,11 @@ services:
       ALPACA_WEEKLY_SECRET_KEY: ${ALPACA_WEEKLY_SECRET_KEY:?set ALPACA_WEEKLY_SECRET_KEY in .env}
       ALPACA_YOLO_API_KEY: ${ALPACA_YOLO_API_KEY:?set ALPACA_YOLO_API_KEY in .env}
       ALPACA_YOLO_SECRET_KEY: ${ALPACA_YOLO_SECRET_KEY:?set ALPACA_YOLO_SECRET_KEY in .env}
-      # X-signal follower (x_copy_run.py). XAI_API_KEY powers the post feed; the
-      # bots that cannot run without their Alpaca keys use ":?" above, but these
-      # are deliberately OPTIONAL so a missing key can never stop the three
-      # funded bots from starting. Without the key the feed reports a read
-      # failure (never "he posted nothing") and without the account keys the
-      # follower runs in shadow mode.
-      XAI_API_KEY: ${XAI_API_KEY:-}
-      X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
-      ALPACA_COPY_API_KEY: ${ALPACA_COPY_API_KEY:-}
-      ALPACA_COPY_SECRET_KEY: ${ALPACA_COPY_SECRET_KEY:-}
-      ALPACA_COPY_BASE_URL: ${ALPACA_COPY_BASE_URL:-https://paper-api.alpaca.markets/v2}
+      # NOTE (2026-10-15): the XAI_API_KEY / X_BEARER_TOKEN / ALPACA_COPY_* vars
+      # that used to be passed here belonged to the X-copy follower, which has
+      # been removed as a strategy. Nothing in this service reads them now. The
+      # xAI key itself is untouched and stays in the host's .env — other
+      # projects on this host share it.
     volumes:
       - trader-data:/data
     ports:

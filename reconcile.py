@@ -182,8 +182,7 @@ def save_benchmark(client: AlpacaClient, symbol: str = "SPY", days: int = 180) -
 def main() -> None:
     db.init_db()
     accounts = ([sys.argv[1]] if len(sys.argv) > 1
-                else [a for a in ("daily", "weekly", "yolo", "copy")
-                      if a != "copy" or config.copy_account_configured()])
+                else [a for a in ("daily", "weekly", "yolo")])
     for a in accounts:
         try:
             reconcile_account(a)

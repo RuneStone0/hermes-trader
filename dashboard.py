@@ -27,13 +27,11 @@ import config
 import db
 import schedule
 
-ACCOUNTS = ("daily", "weekly", "yolo", "copy")
-_STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo",
-             "copy": "x_copy"}
+ACCOUNTS = ("daily", "weekly", "yolo")
+_STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
 _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback",
                    "mr_rsi2": "Mean reversion",
-                   "yolo": "YOLO", "selfheal": "Self-heal",
-                   "x_copy": "X copy"}
+                   "yolo": "YOLO", "selfheal": "Self-heal"}
 # An account can host more than one sleeve: the daily ACCOUNT runs the SPY
 # opening-range breakout AND the mean-reversion sleeve (separate strategies, one
 # account, separate risk budgets). The account card's "last decision" line must
@@ -43,19 +41,13 @@ _ACCOUNT_STRATEGIES = {
     "daily": ("daily_orb", "mr_rsi2"),
     "weekly": ("weekly_pullback",),
     "yolo": ("yolo",),
-    "copy": ("x_copy",),
 }
 _ACCOUNT_LABEL = {"daily": "Daily ORB + Mean reversion", "weekly": "Weekly pullback",
-                  "yolo": "YOLO", "copy": "X copy"}
+                  "yolo": "YOLO"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
                     "blocked": "#d29922",
-                    "fix": "#2ea043", "warn": "#d29922",
-                    # copy follower: "post" is the monitoring line (nothing was
-                    # decided), "read" is a post that was not a trade, "shadow" is
-                    # an order the bot would have placed with no account to place it in
-                    "post": "#58a6ff", "read": "#8b949e", "shadow": "#a371f7",
-                    "review": "#d29922"}
+                    "fix": "#2ea043", "warn": "#d29922"}
 
 # Plain-English label + explanation for each journal badge. The dashboard is read
 # by a non-expert: no GO / NO_GO / EXIT shorthand, and every badge carries a
@@ -71,10 +63,6 @@ _DECISION_LABELS = {
     "warn":      ("Warning",   "Something looked off, but the bot carried on."),
     "fix":       ("Fixed",     "The self-healing routine corrected a problem automatically."),
     "apply":     ("Tuned",     "The self-improvement routine adjusted a setting inside the safety limits."),
-    "post":      ("Post",      "The followed account published a new post. Reading it comes next."),
-    "read":      ("Read",      "The bot read a post from the followed account and it was not a trade signal — see the reason."),
-    "shadow":    ("Shadow",    "The bot would have placed this order, but there is no broker account to place it in yet. Nothing was sent to the broker."),
-    "review":    ("Needs a look", "This post looks like a position but the bot will not act on it by itself — usually a trade shown only in a picture, or one with no instrument named."),
 }
 
 # Symbol -> (full name, one-line description) for the hover / tap tooltip.
@@ -952,8 +940,7 @@ def _page(title: str, active: str, body: str) -> str:
     gen = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     # Top menu bar: title/brand + nav, saves vertical space vs a standalone h1.
     items = [("overview", "Overview", "/"), ("daily", "Daily", "/daily"),
-             ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo"),
-             ("copy", "Copy", "/copy")]
+             ("weekly", "Weekly", "/weekly"), ("yolo", "YOLO", "/yolo")]
     links = []
     for key, label, href in items:
         cls = " active" if key == active else ""
@@ -1100,25 +1087,6 @@ def _overview_body() -> str:
                          f"</span></div>")
         next_line = (f"<div class='muted' style='font-size:11px;margin-top:4px'>"
                      f"next: {schedule.next_label(a, now)}</div>")
-        if a == "copy" and not config.copy_account_configured():
-            # No broker account exists, so there is no portfolio to show. The
-            # card shows what this bot actually does instead of a row of zeroes:
-            # how many of his posts are on file, and when the newest one landed.
-            posts = db.x_posts(limit=500)
-            newest = posts[0]["posted_at"] if posts else None
-            acct_cards.append(
-                f"<a class='acct' href='/copy'>"
-                f"<h3>COPY</h3>"
-                f"<div class='card-title' style='margin-top:2px'>His posts on file</div>"
-                f"<div class='big'>{len(posts)}</div>"
-                f"<div class='muted' style='margin-top:6px'>"
-                f"@{html.escape(config.X_FEED['handle'])}"
-                f"{' · newest ' + _when_tag(newest) if newest else ' · none yet'}</div>"
-                f"<div class='muted' style='margin-top:2px'>shadow — no broker "
-                f"account, so nothing is traded</div>"
-                f"{next_line}{last_line}</a>")
-            continue
-
         eq_a = eq.get(a)
         eq_txt = _money(eq_a) if eq_a is not None else "—"
         net_cls = "pos" if s["net"] > 0 else ("neg" if s["net"] < 0 else "")
@@ -1133,12 +1101,7 @@ def _overview_body() -> str:
         )
 
     s_all = _stats(closed)
-    # An unconfigured copy account has no money and no trades, so its nominal
-    # starting capital must not be counted in the portfolio totals: it would
-    # dilute every other bot's return by a fifth for nothing. (Its card still
-    # renders — that is where the post monitoring lives.)
-    counted = tuple(a for a in ACCOUNTS
-                    if a != "copy" or config.copy_account_configured())
+    counted = ACCOUNTS
     eq_vals = [e for e in eq.values() if e is not None]
     total_eq = sum(eq_vals) if eq_vals else None
     cash_vals = [s["cash"] for s in st.values() if s.get("cash") is not None]
@@ -1175,137 +1138,6 @@ def _overview_body() -> str:
 """
 
 
-def _post_badge(state: str, live: bool) -> str:
-    """A pill for what the bot did with one post.
-
-    The copy page is a monitoring view first: the question it answers is "did he
-    post, and what did we do about it?", so every post carries its disposition
-    even when there was no trade.
-    """
-    s = str(state or "new")
-    if s == "done":
-        if live:
-            return _badge("Acted", "The bot mirrored this post — the order is in the "
-                                   "journal below.", "#3fb950")
-        return _badge("Shadow", "The bot would have placed this order, but there is no "
-                                "broker account for the copy bot yet, so nothing was "
-                                "sent to the broker and no P/L is claimed.", "#a371f7")
-    table = {
-        "new": ("Unread", "#8b949e",
-                "Stored a moment ago — the bot reads it on its next pass."),
-        "ignored": ("No trade", "#8b949e",
-                    "Read, and it was not a trade signal."),
-        "review": ("Needs a look", "#d29922",
-                   "Looks like a position, but the bot will not act on this one by "
-                   "itself — read the reason."),
-        "open": ("Queued", "#d29922",
-                 "An entry the bot intends to mirror; it waits for the market to open "
-                 "instead of chasing the price."),
-        "exit": ("Exit queued", "#d29922",
-                 "An exit the bot intends to mirror at the next open."),
-        "rejected": ("Not taken", "#d29922",
-                     "The bot wanted to mirror this and its risk rules stopped it — "
-                     "read the reason."),
-    }
-    label, color, desc = table.get(s, (s.title(), "#8b949e", "Bot activity."))
-    return _badge(label, desc, color)
-
-
-def _media_pill() -> str:
-    return _badge("Image", "This post has an attached image — a position shown only "
-                           "in a picture cannot be read automatically, so it is "
-                           "flagged for a look rather than guessed at.", "#8b949e")
-
-
-def _signals_block(live: bool, limit: int = 12) -> str:
-    """His recent posts and what the bot did with each one."""
-    rows = db.x_posts(limit=limit)
-    if not rows:
-        return ("<p class='muted'>No posts stored yet — the bot polls every "
-                "10 minutes and this fills in as soon as he posts.</p>")
-    body = []
-    for r in rows:
-        text = " ".join((r["text"] or "").split())
-        shown = html.escape(text[:220] + ("…" if len(text) > 220 else ""))
-        if not text:
-            shown = "<span class='muted'>(no text — image only)</span>"
-        full = html.escape(text[:1200] or "This post has no text.")
-        meta = ""
-        if r["symbol"]:
-            conf = f" · {r['confidence']:.0%} sure" if r["confidence"] else ""
-            meta = (f"<div class='muted' style='margin-top:3px'>"
-                    f"{html.escape(str(r['symbol']))}"
-                    f"{' ' + html.escape(str(r['side'])) if r['side'] else ''}{conf}</div>")
-        body.append(
-            f"<tr><td class='muted'>"
-            f"<a class='hint' href='{html.escape(r['url'] or '#')}' target='_blank' "
-            f"rel='noopener' data-name='Open the post on X' "
-            f"data-desc='Published {html.escape(str(r['posted_at'] or ''))} UTC. Opens "
-            f"x.com in a new tab.'>{_fmt_ts(r['posted_at'])}</a>"
-            f"{'<br>' + _media_pill() if r['has_media'] else ''}</td>"
-            f"<td><span class='hint' tabindex='0' role='button' data-name='His post' "
-            f"data-desc='{full}'>{shown}</span></td>"
-            f"<td>{_post_badge(r['state'], live)}"
-            f"<div class='muted' style='margin-top:3px'>{html.escape((r['reason'] or '')[:150])}</div>"
-            f"{meta}</td></tr>")
-    return (f"<div class='panel'><table>"
-            f"<tr><th>When</th><th>Post</th><th>Bot</th></tr>"
-            f"{''.join(body)}</table></div>")
-
-
-def _feed_meta(account: str) -> str:
-    """The copy page's page-meta tail: is the monitor actually watching?"""
-    if account != "copy":
-        return ""
-    try:
-        handle = config.X_FEED["handle"]
-        rows = db.x_posts(limit=1000)
-        newest = rows[0]["posted_at"] if rows else None
-        needs = len(db.x_posts(limit=500, states=("review",)))
-        last_poll = db.feed_state_get("last_poll")
-        last_error = db.feed_state_get("last_error")
-        live = config.copy_account_configured()
-    except Exception:                                              # noqa: BLE001
-        return ""
-    bits = [
-        f"<span class='hint' tabindex='0' role='button' data-name='Following @{html.escape(handle)}' "
-        f"data-desc='The bot reads his ORIGINAL posts only — his replies are conversation, "
-        f"not signals. Nothing here needs clicking; every item explains itself on hover.'>"
-        f"watching @{html.escape(handle)}</span>",
-    ]
-    if last_poll:
-        bits.append(f"<span class='hint' tabindex='0' role='button' data-name='Last check' "
-                    f"data-desc='When the bot last successfully read his timeline. It polls "
-                    f"every {int(config.X_FEED.get('poll_interval_s', 600)) // 60} minutes, "
-                    f"around the clock.'>checked {_when_tag(last_poll)}</span>")
-    else:
-        bits.append("<span class='muted'>first check still to run</span>")
-    if newest:
-        bits.append(f"<span class='hint' tabindex='0' role='button' data-name='Newest post' "
-                    f"data-desc='The most recent post by him that the bot has stored.'>"
-                    f"newest post {_when_tag(newest)}</span>")
-    bits.append(f"<span class='hint' tabindex='0' role='button' data-name='Posts stored' "
-                f"data-desc='How many of his posts the bot has on file. Kept as an audit "
-                f"trail of what it saw and what it did about it.'>{len(rows)} on file</span>")
-    if needs:
-        bits.append(f"<span class='hint' tabindex='0' role='button' data-name='Needs a look' "
-                    f"data-desc='Posts that look like a position but that the bot will not "
-                    f"act on by itself — usually a trade shown only in a picture.'>"
-                    f"<strong>{needs} need a look</strong></span>")
-    if last_error:
-        bits.append(f"<span class='hint' tabindex='0' role='button' data-name='Last feed error' "
-                    f"data-desc='A poll that failed to read his timeline. A failed read is "
-                    f"never treated as &quot;he posted nothing&quot; — it is logged here.'>"
-                    f"<strong>last feed error {html.escape(last_error[:40])}</strong></span>")
-    if not live:
-        bits.append("<span class='hint' tabindex='0' role='button' data-name='Shadow mode' "
-                    "data-desc='No broker account is configured for this bot yet, so it "
-                    "reads his posts and works out the exact order it would place — then "
-                    "places nothing and claims no profit. Add the account keys to switch "
-                    "it on.'><strong>shadow — nothing is being traded</strong></span>")
-    return " <span class='muted'>·</span> " + " <span class='muted'>·</span> ".join(bits)
-
-
 def _account_body(account: str) -> str:
     db.init_db()
     trades = [t for t in db.all_trades() if t["account"] == account]
@@ -1329,9 +1161,6 @@ def _account_body(account: str) -> str:
     capital = _starting_capital(account, st)
     inception = _inception(account, trades)
     bench = _bench_return(inception)
-    # The copy bot's own view: what he posted, and what the bot did about it.
-    live = config.copy_account_configured()
-    signals = ""
     win_txt = f"{s['win_rate']:.0%}"
     cards = (f"<div class='grid'>\n"
              f"{_portfolio_card(sa.get('equity'), sa.get('cash'))}\n"
@@ -1341,42 +1170,11 @@ def _account_body(account: str) -> str:
              f"{_card('Open positions', str(len(open_t)))}\n"
              f"{_curve_card(curve_pts, _bench_curve(curve_pts, capital))}\n"
              f"</div>")
-    if account == "copy" and not live:
-        # There is no broker account, so a portfolio value, a P/L and an equity
-        # curve would be a row of dashes and zeroes — noise, not information.
-        # These cards say what this bot actually did instead, and they use the
-        # same card, the same tooltip and the same grid as every other page.
-        posts = db.x_posts(limit=1000)
-        kinds = [str(p["kind"] or "none") for p in posts]
-        n_stated = sum(1 for k in kinds if k in ("open", "add", "close", "trim"))
-        n_mention = sum(1 for k in kinds if k == "interest")
-        n_shadow = sum(1 for p in posts if p["state"] == "done")
-        n_review = sum(1 for p in posts if p["state"] == "review")
-        cards = "<div class='grid'>" + "".join([
-            _card('His posts on file', str(len(posts)),
-                  'originals only — replies are ignored',
-                  desc='Every original post of his that the bot is holding, newest first. His replies are never read.'),
-            _card('Positions he stated', str(n_stated),
-                  'he said he was in a trade',
-                  desc='Posts where he said he had taken, added to or exited a position. These are followed at the usual size.'),
-            _card('Names he mentioned', str(n_mention),
-                  'no position claimed — followed at half size',
-                  desc='Posts where he named instruments he likes or is watching without claiming a position. His real calls are behind a paywall, so these are the most common signal he posts: they are followed, but sized down and given a shorter shelf life.'),
-            _card('Would-be trades', str(n_shadow),
-                  'no broker account, so none were placed',
-                  desc='Trades the bot sized and would have placed. In shadow mode the broker is never contacted: no order, no fill, no P&L.'),
-            _card('Needs a look', str(n_review),
-                  'the bot will not act on these alone',
-                  desc='Posts that look like a position but that the bot will not mirror by itself — usually a trade visible only in a picture, or one with no instrument named.'),
-        ]) + "</div>"
-    if account == "copy":
-        signals = f"<h2>His posts</h2>\n{_signals_block(live)}\n"
 
     return f"""
-<div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong>{_gov_meta(account)}{_feed_meta(account)}</div>
+<div class='page-meta'><span class='strategy'>{html.escape(label)}</span> <span class='muted'>·</span> next eval <strong>{schedule.next_label(account)}</strong>{_gov_meta(account)}</div>
 {cards}
 
-{signals}
 <h2>Positions &amp; trades</h2>
 {_positions_trades_block(open_t, recent, eq, with_account=False)}
 

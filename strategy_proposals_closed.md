@@ -230,6 +230,22 @@ question is unchanged and unnamed by any feature measured so far: what makes
 YOLO's 6-of-19 entries reach +1R MFE at all. Caveat carried by the study:
 forward windows overlap, so the effective sample is far below the nominal n.
 
+## 13. "The copy follower is worth keeping — build on it (paid X read token, image reading, mention signals)"
+**VERDICT: REMOVED AS A STRATEGY 2026-10-15. Do not re-propose.** Rune's decision,
+relayed from the politiupdate profile: the sleeve is deleted outright, not paused.
+
+Measurement: the feed was the sole consumer of xAI's server-side `x_search` tool and
+made up the whole "X posts fetched" line on the xAI bill — **$21.33/week** at $0.005
+per post fetched plus **$6.79/week** of Grok tokens (**~$122/month**) — for 4,300
+billed fetches/week that bought **~21 genuinely new posts (0.49% useful, ~$1.02 per
+captured post)**, while polling 144x/day with no date bound on the question. It
+never traded: shadow mode, no Alpaca account, 0 copy trades and 0 trade rows with a
+`signal_post_id`. Findings #8, #9 and #10 above are therefore historical — there is
+no code left for them to apply to (`tests/test_x_copy.py` was deleted with it).
+
+Falsifier: a captured post whose TEXT named an instrument AND a positive net-R book
+over >= 30 closed trades, at under ~$0.05 per captured post.
+
 ---
 
 Settled findings are also mirrored at
