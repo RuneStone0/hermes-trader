@@ -338,6 +338,3 @@ Settled findings are also mirrored at
 `/data/trading/strategy_proposals_closed.md` inside the `hermes-trader`
 container — that volume copy is the one the nightly routine reads.
 
-
----
-Deploy-path smoke test 2026-10-19: docs-only change to exercise the auto-deploy fast path. Safe to delete.
