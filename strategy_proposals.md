@@ -485,3 +485,59 @@ regresses toward the backtest's.
    rates (1 trade / 6 weeks; ~10 setups / year). That is a structural question
    about what "tuned" can ever mean for a low-frequency sleeve — to be decided
    with a backtest, not this week.
+
+### Addendum (12:35 UTC, same review): split the book by STOP QUALITY — the loss is the pre-fix cohort
+
+The single most useful cut of the 23 YOLO rows, and it changes the reading of the
+aggregate. Cohort = stop distance in ATR(14) at entry (telemetry, populated 23/23):
+
+| cohort | n | sumR | avgR | t | capture (realised ÷ offered MFE) | MFE ≥ 1R |
+|---|---|---|---|---|---|---|
+| **sane stops ≥ 1.0 ATR** (every trade opened since 2026-09-14) | 16 | **+6.00** | **+0.375** | +1.19 (95% CI ±0.62 → [−0.24, +1.00]) | **+0.434** | 6/16 |
+| noise stops < 1.0 ATR (the pre-2026-09-17 defect) | 7 | **−7.94** | −1.134 | −9.88 | −1.909 | 2/7 |
+| all | 23 | −1.94 | −0.084 | −0.32 | −0.108 | 8/23 |
+
+So "YOLO is near breakeven" is a **mixture of two different rules**: the seven
+noise-stop trades lost almost exactly 1R each, as a stop sitting inside the noise
+must, and they account for **−7.94R of the −1.94R total**; the sixteen trades taken
+under the current geometry are **+6.00R with a +0.43 capture**. The 2026-09-17 fix
+therefore has a real before/after, and the live rule is the positive half.
+
+**Caveat, stated plainly:** the split is confounded with time and regime (all seven
+noise-stop trades are from 2026-09-08..10, a falling tape), n=16 gives t=+1.19, and
+the CI still includes zero. This is the best available reading, not a proven edge —
+and it is the number to watch when the bucket passes 30.
+
+### Disposition of the 2026-10-19 nightly batch (the repaired loop's first output)
+
+The loop's first real output in 15 nights is in this queue above (3 structural
+proposals, 8 lessons). Dispositions, each with the measurement:
+
+1. **"Raise MIN_NET_RR from 0.5 to 1.0"** → **REJECTED AS INERT.** Measured
+   `rr_planned` on all 23 closed YOLO rows: 2.00–2.27 (0 of 23 below 1.0, 0 below
+   2.0; the only NULLs are the 3 pre-Sep-17 rows). The 0.5 net-RR floor never
+   admitted anything this sleeve actually takes, so raising it changes no decision
+   and no trade. Its own falsifier resolves on the "floor is not binding" branch.
+2. **"Index-regime throttle: halve new entries when SPY is below its 20d and VIX is
+   rising"** → **REJECTED — wrong sign on the only data that exists.** SPY vs its
+   20d-at-entry, reconstructed from SPY daily closes for the 16 rows that carry an
+   `entry_time` (7 pre-Sep-17 rows are NULL): below-20d **n=8, avgR +0.536** (3/8
+   MFE≥1R) vs above-20d **n=8, avgR +0.208** (3/8). The throttle would have cut the
+   *better* half. Difference +0.33R, t≈0.5 — no evidence in either direction, so
+   nothing is deployed; the premise is contradicted in sign and the sample cannot
+   settle it. Re-open only with n≥30 and a regime field persisted at entry (the
+   journaled snapshot currently carries none — this cut had to be reconstructed).
+3. **"Instrument exits: log exit reasons + MFE, shadow-track hold-to-target"** →
+   **ALREADY IMPLEMENTED — duplicate of settled finding #10.** `mfe_r`, `mae_r` and
+   `stop_atr` are populated for 23/23 YOLO, 4/4 MR and 1/1 ORB closed rows
+   (probe 2026-10-19), and the capture column above is computed from them. The
+   lesson that seeded it ("exit_telemetry is absent for YOLO/DAILY") is **false**:
+   telemetry is absent only for `weekly_pullback`, which has no trades. Recorded as
+   settled finding #17 so it is not re-proposed a third time.
+4. **Kept from the batch:** the lesson that the stored lessons tail carries **stale
+   regime numbers** (it said VIX 14.9 / ATR%ile 14 / breadth 27%; live is VIX 18.8 /
+   ATR%ile 24 / breadth 73%) is a genuine finding — lessons must not present an old
+   reading as the present state. Rule added to the operator skill.
+5. **Note for the next review:** 7 of 23 YOLO rows still have `entry_time = NULL`
+   (all pre-2026-09-17), which is why the regime split covers 16 of 23. Not worth a
+   deploy; do not quote a "23-trade regime split" without saying so.

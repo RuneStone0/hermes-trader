@@ -299,6 +299,39 @@ the mistake is reading counts as activity. This is the same trap as #2 in the
 skill's pitfalls — audit by counting what a bot *dispositioned* against what it
 *journaled*, and use the log for run frequency.
 
+## 17. "Exit telemetry (MFE/MAE, stop distance in ATR) is missing, so an exit defect cannot be measured"
+**VERDICT: FALSE — it is implemented and populated. Do not re-propose. (2026-10-19)**
+
+The nightly routine filed this again on 2026-10-19, seeded by its own stale lesson
+("exit_telemetry is absent for YOLO/DAILY"). Measured by probe against the live DB:
+
+| book | closed | mfe_r | mae_r | stop_atr |
+|---|---|---|---|---|
+| yolo | 23 | 23 | 23 | 23 |
+| mr_rsi2 | 4 | 4 | 4 | 4 |
+| daily_orb | 1 | 1 | 1 | 1 |
+| weekly_pullback | 0 | — | — | — |
+
+`r_telemetry.py` fills all three from 5-min bars at close. Telemetry is absent only
+for the book with no trades. The capture / stop-quality analysis in the 2026-10-19
+review is computed from these columns, which is the proof they are usable.
+
+**Falsifier:** a closed row with `telemetry_at` set but `mfe_r` NULL, or any book
+with trades and <100% coverage.
+
+## 18. "Stale regime numbers in the lessons tail are harmless context"
+**VERDICT: NO — a lesson that states live market numbers is read as CURRENT state
+for weeks by every bot prompt. (2026-10-19)**
+
+Measured: the lessons tail that every bot prompt carries still described "SPY above
+20d/50d/200d, VIX 14.9, ATR%ile 14, breadth 27%" while the live tape was VIX 18.83
+(+8.7% 5d), ATR%ile 24.4, SPY BELOW its 20d, breadth 72.7. The routine itself
+flagged the contradiction on 2026-10-19. Rule: a lesson may cite a number as
+*evidence for a verdict*; it must not present it as the present state.
+
+**Falsifier:** a bot decision whose rationale quotes a regime input that does not
+match that run's own `market_context` block.
+
 ---
 
 Settled findings are also mirrored at
