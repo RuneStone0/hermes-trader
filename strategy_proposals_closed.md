@@ -246,7 +246,7 @@ no code left for them to apply to (`tests/test_x_copy.py` was deleted with it).
 Falsifier: a captured post whose TEXT named an instrument AND a positive net-R book
 over >= 30 closed trades, at under ~$0.05 per captured post.
 
-## 14. "The nightly self-improve loop is running and genuinely finds nothing (14+ nights of '0 lessons, 0 proposals')"
+## 14. "The nightly self-improve loop is running and genuinely finds nothing (15 consecutive nights of '0 lessons, 0 proposals')"
 **VERDICT: FALSE — the answer was being TRUNCATED at `max_tokens=4000`, and the
 truncation was laundered into a no-op. Fixed in v1.6.5 (2026-10-19).**
 

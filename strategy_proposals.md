@@ -366,7 +366,9 @@ The defect of the week is not in the strategies — it is in the machinery that 
 supposed to notice when a strategy stops working.
 
 **MEASURED (live, in-container, 2026-10-19): the nightly self-improvement loop has
-been returning nothing for 14+ consecutive nights because its answer was being
+been returning nothing for 15 consecutive nightly runs (2026-09-28 → 2026-10-16,
+counted from `/data/logs/self_improve.log`; the last productive run was
+2026-09-25) because its answer was being
 TRUNCATED, and the truncation was laundered into "nothing to say".**
 Rebuilding the routine's exact payload (15,095-char user message, 5,983 prompt
 tokens) against the live model:
@@ -475,7 +477,7 @@ regresses toward the backtest's.
    append lessons for the first time since 2026-09-25, and its journal row should
    read "Nothing new" only if it genuinely produced nothing. If it errors, the
    error names the finish_reason. Watch `lessons_learned.md` grow and read the
-   lessons before trusting them: 14 nights of no review means the first batch is
+   lessons before trusting them: 15 nights of no review means the first batch is
    unreviewed output, and the auto-apply path is still gated at 30 trades.
 3. **Tue 2026-10-20 12:30Z HIGH: Building Permits + Housing Starts** — the event
    guard should cut size 50%; confirm it journals "Sizing at 50%".
