@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 
 # App version (bumped manually on releases; shown in the dashboard footer).
+# Auto-deploy note (2026-10-19): a commit touching ONLY *.md or docs/ is
+# fast-forwarded without a rebuild. This is a code file, so editing it deploys.
 VERSION = "1.6.5"
 
 # --------------------------------------------------------------------------- #
