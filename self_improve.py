@@ -197,9 +197,74 @@ def _tail(path, n: int = 2000, out: bool = False) -> str:
     if not path.exists():
         return ""
     text = path.read_text()
-    # A settled-findings file is read from the HEAD when it is short enough to fit
-    # whole (the newest verdicts live at the top), else from the tail.
     return text if out else text[-n:]
+
+
+def _settled_brief(path, budget: int = 7000) -> str:
+    """Deliver EVERY settled question WITH its verdict, compactly.
+
+    Two silent failures this replaces:
+    1. The delivery took the first 3,000 chars of the file. Entries are
+       APPENDED, so the head holds the OLDEST verdicts and a newly recorded one
+       was invisible the moment the file outgrew the budget. Measured
+       2026-10-19: the live file was 17,791 chars and the 3,000-char window
+       delivered entries 1-2 only — thirteen verdicts, including every one
+       recorded after 2026-09-28, never reached the routine.
+    2. The whole file cannot be sent either (17.8 KB and growing ~1-3 entries a
+       week), so "send it all" just moves the cliff.
+
+    What the routine actually needs to avoid re-filing is one line per settled
+    question: the heading (the question) plus its `**VERDICT:**` line (the
+    answer). That fits every entry in a fraction of the file, and it is what is
+    sent. Entries without a VERDICT line fall back to their heading, so a
+    malformed entry can never silently vanish.
+    """
+    if not path.exists():
+        return ""
+    text = path.read_text()
+    if not text.strip():
+        return ""
+
+    sections: list[tuple[str, str]] = []
+    head, body = "", []
+    for ln in text.splitlines():
+        if ln.startswith("## "):
+            if head:
+                sections.append((head, "\n".join(body)))
+            head, body = ln.strip(), []
+        elif head:
+            body.append(ln)
+    if head:
+        sections.append((head, "\n".join(body)))
+    if not sections:
+        # No "## " headings at all: there is nothing to index, so deliver the
+        # text whole (bounded). Dropping it would silently send an empty
+        # settled_findings, which reads to the routine as "nothing is settled".
+        return text[:budget]
+
+    def verdict_of(body_text: str, limit: int = 300) -> str:
+        for ln in body_text.splitlines():
+            if "**VERDICT" in ln.upper():
+                return ln.strip().strip("_*")[:limit]
+        return ""
+
+    # Per-entry allowance shrinks until the WHOLE list fits the budget — never
+    # truncate the tail of the list, because that is where the newest verdicts
+    # live (the exact bug this function replaces).
+    allow = max(120, budget // max(1, len(sections)))
+    out = ""
+    for _ in range(40):
+        lines = ["SETTLED QUESTIONS (question + verdict). Do not re-propose any of "
+                 "these without naming the measurement you are overturning:"]
+        for h, b in sections:
+            h_txt = h[:max(60, allow - 90)]
+            v = verdict_of(b, limit=max(60, allow - len(h_txt) - 10))
+            lines.append(f"- {h_txt}" + (f"  {v}" if v else ""))
+        out = "\n".join(lines)
+        if len(out) <= budget or allow <= 130:
+            break
+        allow -= 10
+    return out[:budget]
 
 
 def review_payload(perf: dict, ctx: dict, knobs: list[dict]) -> dict:
@@ -210,9 +275,7 @@ def review_payload(perf: dict, ctx: dict, knobs: list[dict]) -> dict:
     the same ATR-stop, sector-RS and config-drift proposals re-filed nightly for
     two weeks, none of them testable as written).
     """
-    settled = _tail(config.CLOSED_PROPOSALS_PATH, out=True)
-    if len(settled) > 3000:
-        settled = settled[:3000]
+    settled = _settled_brief(config.CLOSED_PROPOSALS_PATH)
     return {
         "performance": perf,
         "sample_gate_closed_trades": config.MIN_CLOSED_TRADES_TO_TUNE,

@@ -246,6 +246,59 @@ no code left for them to apply to (`tests/test_x_copy.py` was deleted with it).
 Falsifier: a captured post whose TEXT named an instrument AND a positive net-R book
 over >= 30 closed trades, at under ~$0.05 per captured post.
 
+## 14. "The nightly self-improve loop is running and genuinely finds nothing (14+ nights of '0 lessons, 0 proposals')"
+**VERDICT: FALSE — the answer was being TRUNCATED at `max_tokens=4000`, and the
+truncation was laundered into a no-op. Fixed in v1.6.5 (2026-10-19).**
+
+Measurement, live in-container 2026-10-19 on the routine's real payload
+(15,095-char user message, 5,983 prompt tokens, `deepseek-flash`):
+
+| max_tokens | finish_reason | reasoning tokens | content | outcome |
+|---|---|---|---|---|
+| 4,000 (the live setting) | `length` | 2,559 | 5,235 chars, cut mid-JSON | `_extract_json` → `{}`; `isinstance(out, dict)` passes; routine prints "appended 0 lessons; Auto-tuned 0 setting(s); 0 structural proposal(s)" and exits 0 |
+| 8,000 (same payload) | `stop` | 5,253 | 6,812 chars | **8 lessons + 4 proposals** |
+
+`advisor.chat()` returned only `content`, so a starved call and a genuinely empty
+one were indistinguishable — the same failure class as the September decision-path
+starvation (`_DECISION_MAX_TOKENS = 8000`), never applied to the review call. The
+loop is the only adaptation mechanism the system has; `lessons_learned.md` had not
+been appended since 2026-09-25.
+
+**Standing rule:** never conclude the loop "has nothing to say" from its summary
+line. Check `finish_reason` and the content length. An unreadable answer now
+journals an `error`; a genuine empty answer journals a visible `no-op`.
+
+**Falsifier / what a real no-op looks like:** `finish_reason='stop'`, a parseable
+object, both lists empty — that is now a distinct journaled row, so the two cases
+can be told apart from the database instead of from a log line.
+
+## 15. "weekly_pullback is dead — zero trades in 7 weeks"
+**VERDICT: NOT BROKEN — RARE. Do not re-propose 'fix the weekly sleeve' without
+naming a broken invariant. (2026-10-19)**
+
+Measurement: the job executes every weekday at 14:45 UTC (`/data/logs/weekly.log`,
+rc=0 every run — its log lines were empty because the two skip paths printed
+nothing, fixed in v1.6.5). Its trigger (price within 1×ATR(14) of the 100d SMA)
+fired on **76 of 1,944 backtest sessions = 3.9%**, i.e. ~10 setups/year, so zero
+setups in the ~35 looks since 2026-09-01 has **p = 0.25** — ordinary. At that rate
+the sleeve needs **~3 years** to reach `MIN_CLOSED_TRADES_TO_TUNE` (30).
+
+**Falsifier:** a weekday where `weekly.log` has no entry, a run with rc≠0, or a
+skipped setup whose reason is anything other than "no pullback to SMA today".
+
+## 16. "The journal's EVENT COUNTS tell you how often a bot ran or took a decision"
+**VERDICT: NO — they undercount by construction. Read the last event's AGE and
+the job log. (2026-10-19)**
+
+`db.log_event(..., dedup=True)` refreshes the timestamp of the last identical
+`(account, strategy, decision, reason)` row instead of inserting a new one, so the
+digest's `weekly_pullback skip n=2` represents ~35 evaluated runs and
+`daily_orb skip n=4` a month of 5-minute ticks. The dedupe is deliberate (it keeps
+the journal readable and makes the dashboard's "age of last decision" meaningful);
+the mistake is reading counts as activity. This is the same trap as #2 in the
+skill's pitfalls — audit by counting what a bot *dispositioned* against what it
+*journaled*, and use the log for run frequency.
+
 ---
 
 Settled findings are also mirrored at

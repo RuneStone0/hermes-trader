@@ -333,3 +333,153 @@ sleeves, their Alpaca accounts and their data were NOT touched.
 an instrument, plus positive expectancy over >= 30 closed trades, at a measured
 cost per captured post under ~$0.05. Anything less is the same $122/month for the
 same 0.5%.
+
+---
+
+## 2026-10-19 12:00 UTC — WEEKLY REVIEW (week of 2026-10-12 → 10-16)
+
+### The week in R, and against SPY buy-and-hold
+
+| book | closed this wk | sumR wk | net $ wk | closed all-time | sumR all-time | equity | SPY since 2026-09-08 |
+|---|---|---|---|---|---|---|---|
+| yolo | 4 | **+3.52** | +$25.13 | 23 | **−1.94** | 9,901.12 (−0.99%) | −0.11% → **−0.88pp** |
+| mr_rsi2 (daily acct) | 1 | −1.00 | −$36.40 | 4 | −0.21 | 9,985.10 (−0.15%) | **−0.04pp** |
+| daily_orb (daily acct) | 0 | — | — | 1 | +0.21 | (same account) | — |
+| weekly_pullback | 0 | — | — | 0 | — | 10,000.00 (0.00%) | **+0.11pp** (in cash) |
+| **book** | **5** | **+2.52** | **−$11.27** | **28** | **−1.94** | — | **SPY −1.89% this week** |
+
+SPY closed 778.03 (10-12) → 763.34 (10-16), **−1.89%** — its worst week of the
+period. YOLO was **+3.52R / +$25.13** against it (three winners: XLV +2.09R at its
+target, XLE +1.97R at its target, IWM +0.23R; one loser AMZN −0.77R). The book's
+net dollars are negative for the week only because the single MR stop-out carried
+**5.5× the risk** of the largest YOLO trade (−$36.40 at $36.33 risk vs +$15.52 at
+$7.42) — which is the sizing point below, not a signal about either rule.
+
+### Classification: (b) SAMPLE TOO SMALL — and one (c) DEMONSTRABLE DEFECT, found and fixed
+
+Every bucket is below `MIN_CLOSED_TRADES_TO_TUNE` (30): yolo 23, mr_rsi2 4,
+daily_orb 1, weekly 0. No parameter may be tuned, and nothing was. YOLO's −1.94R
+over 23 trades is **t = −0.32**: statistically indistinguishable from zero. This
+week's +3.52R is **four trades** and proves nothing on its own.
+
+The defect of the week is not in the strategies — it is in the machinery that is
+supposed to notice when a strategy stops working.
+
+**MEASURED (live, in-container, 2026-10-19): the nightly self-improvement loop has
+been returning nothing for 14+ consecutive nights because its answer was being
+TRUNCATED, and the truncation was laundered into "nothing to say".**
+Rebuilding the routine's exact payload (15,095-char user message, 5,983 prompt
+tokens) against the live model:
+
+| max_tokens | finish_reason | reasoning tokens | content | result |
+|---|---|---|---|---|
+| 4,000 (the live setting) | `length` | 2,559 | 5,235 chars, **cut mid-JSON** | `_extract_json` → `{}` → `isinstance(dict)` passes → **"appended 0 lessons; 0 proposals", exit 0** |
+| 8,000 (same payload) | `stop` | 5,253 | 6,812 chars | **8 lessons + 4 proposals** |
+
+`advisor.chat()` returned only `content`, so a starved call and a genuinely empty
+one were the same string. That is the identical failure class the decision path
+fixed with `_DECISION_MAX_TOKENS = 8000` in September — never applied to the
+review call, which is the *only* mechanism this system has for adapting. The
+dashboard showed nothing, `lessons_learned.md` had not been appended since
+2026-09-25, and every bot's prompt was carrying September-era lessons while the
+loop reported healthy every night.
+
+**Fixed and deployed in v1.6.5** (no trading behaviour touched, no backtest
+needed — this is telemetry/observability):
+- `advisor.chat_full()` returns `content`, `reasoning_content`, `finish_reason`
+  and `usage`; `chat()` is the unchanged content-only wrapper.
+- the review budget is 9,000 (reasoning PLUS answer); a cut-off answer is retried
+  once with the model's own truncated turn handed back and asked for the JSON
+  alone (the `advisor.decide` recovery pattern);
+- an unreadable answer now journals an **error** event and writes nothing; a
+  GENUINE empty answer journals a visible **no-op** ("Nothing new") event. Failure
+  and silence are no longer the same row.
+- `weekly_run.py` printed nothing on its two silent return paths, so
+  `weekly.log` was a wall of empty 1-second entries indistinguishable from a
+  crashed run; both now print why.
+- `tests/test_self_improve.py` pins all three modes (unreadable → error, empty →
+  no-op, readable → written) end-to-end with a stubbed LLM.
+
+### Is YOLO broken, or merely near breakeven? The shape says near breakeven
+
+23 closed: **7W/16L (30.4%)**, avg win **+1.62R**, avg loss **−0.83R**. At that
+shape the breakeven win rate is **33.9%** — it is running 0.8 trades short of
+breakeven, i.e. one more winner in 23 would flip the book to positive. For a 2:1
+system P(≤7 wins | p=1/3, n=23) = **48%**, so this is an ordinary draw, not a
+conviction. Realised losses average −0.83R rather than −1.00R because the
+discretionary exits cut losers early — which is also why the shape needs 34% and
+not 50% wins.
+
+Exit quality has genuinely improved: **8 of 23** trades reached ≥ +1R MFE and
+**6 of those 8 converted** to ≥ +1R realised (XLV +2.09, XLE +1.97, QQQ +2.23,
+SMH +2.02, TLT +1.74, XLU +1.05). The one that did not (GLD 09-08, MFE +1.09R →
+−1.07R) is from the pre-2026-09-17 noise-stop era. So the current problem is
+**not exit capture** — it is that only 35% of entries ever offer a 1R excursion.
+
+### PENDING (filed, NOT deployed): risk per trade varies 16.4× — the dollar result is the sizing, not the edge
+
+YOLO's realised initial risk spanned **$3.18 → $52.24** (0.03% → 0.52% of equity;
+median $14.13) across 23 trades on the same $10k account. Consequence: **two SLV
+trades (−1.74R and −1.00R) cost −$116.20, which is 104% of the book's −$111.98
+net loss.** At the median risk the same R stream would be ≈ −$27. corr(risk$, R)
+= **−0.19**, winners' average risk $14.43 vs losers' $19.62 — anti-correlated,
+but n=23 and driven by those two trades, so **it is not convictable**.
+
+**Proposal:** size every YOLO entry from a fixed risk budget (`risk_pct × equity /
+stop_distance`) and treat the LLM's `size_pct` as a *conditional multiplier only*
+(0.25–1.0), so the journal's R and the account's dollars measure the same thing.
+**Why not deployed:** it does not change expectancy per trade — only variance and
+measurability — so a backtest of the R stream cannot rank it, and with n=23 the
+anti-correlation is not evidence. **Falsifier:** if at n≥30 corr(risk$, R) ≥ 0
+then the LLM's sizing carries no information and normalising it is pure hygiene;
+if corr stays ≤ −0.2 AND the two largest-risk trades are again the largest dollar
+losers, the sizing lever is actively harmful and should be removed outright rather
+than clamped.
+
+### PENDING (filed, NOT deployed): mr_rsi2's shape needs a 79% win rate
+
+4 closed: 3W (+0.11, +0.22, +0.46R) against one **−1.00R** stop. At an average win
+of +0.26R the rule must win **79%** of the time to break even. Its winners are
+capturing what they are offered (MFE +0.16/+0.39/+0.47 vs realised +0.11/+0.22/
++0.46 — capture 67%/57%/97%), so this is the rule's designed exit (RSI normalises
+into a small profit) meeting a full-size stop, not a leak. The backtest measured
+this profile as *positive* in chop (+0.15R, n=162), and n=4 cannot overturn it.
+**Watch, do not tune:** the next MR loser and whether the win:loss R ratio
+regresses toward the backtest's.
+
+### Settled this week (recorded in strategy_proposals_closed.md)
+
+- **"The self-improve loop has genuinely found nothing for two weeks."** → **FALSE,
+  it was truncated at max_tokens=4000.** See the table above. Any future claim
+  that the loop is "running and returning empty" must first check
+  `finish_reason`/content length, not the summary line.
+- **"weekly_pullback is dead — zero trades in 7 weeks."** → **NOT BROKEN, RARE.**
+  It executes every weekday at 14:45 UTC (weekly.log, rc=0), and its trigger —
+  price within 1×ATR(14) of the 100d SMA — fired on **76 of 1,944 sessions
+  (3.9%)** in the backtest, i.e. ~10 setups/year, so 0 setups in ~35 looks has
+  has p = **0.25** — ordinary, not broken. It is a low-frequency sleeve that will
+  take **~3 years** to reach 30 closed trades. Do not call it dead, and do not
+  expect it to become tunable.
+- **"The journal's event counts tell you how often a bot ran."** → **NO.** `dedup=True`
+  refreshes the timestamp of the last identical event, so the digest's
+  `weekly_pullback skip n=2` represents ~35 evaluated runs and
+  `daily_orb skip n=4` a whole month of ticks. Read the *age* of the last event
+  (and the job log), never the count, to decide whether a sleeve is alive.
+
+### Watch next week
+
+1. **YOLO reaches the 30-trade gate first** (~4 closed/week → around 10-30). That
+   is the first bucket where a parameter change becomes legal; until then every
+   number above is an estimate with a confidence interval that straddles zero.
+2. **The first two nights of the repaired loop** — the 10-19 21:30 UTC run should
+   append lessons for the first time since 2026-09-25, and its journal row should
+   read "Nothing new" only if it genuinely produced nothing. If it errors, the
+   error names the finish_reason. Watch `lessons_learned.md` grow and read the
+   lessons before trusting them: 14 nights of no review means the first batch is
+   unreviewed output, and the auto-apply path is still gated at 30 trades.
+3. **Tue 2026-10-20 12:30Z HIGH: Building Permits + Housing Starts** — the event
+   guard should cut size 50%; confirm it journals "Sizing at 50%".
+4. **ORB and weekly can never reach 30 closed trades in a year** at their current
+   rates (1 trade / 6 weeks; ~10 setups / year). That is a structural question
+   about what "tuned" can ever mean for a low-frequency sleeve — to be decided
+   with a backtest, not this week.

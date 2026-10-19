@@ -64,32 +64,49 @@ def test_short_file_is_delivered_whole() -> None:
           f"len={len(p['settled_findings'])}")
 
 
-def test_long_file_is_bounded_from_the_head() -> None:
-    print("an over-long settled file is bounded, keeping the NEWEST (top) entries")
+def test_long_file_keeps_every_verdict_and_fits() -> None:
+    print("an over-long settled file still delivers EVERY question + verdict, within budget")
     tmp = Path("/tmp/_settled_long.md")
-    tmp.write_text("NEWEST-VERDICT\n" + ("x" * 5000 + "\n"))
+    body = []
+    for i in range(1, 21):
+        body.append(f'## {i}. "Question number {i}?"\n'
+                    f'**VERDICT: SETTLED-{i} reason {i}.**\n' + ("filler line\n" * 30))
+    body.append('## 21. "The NEWEST question of all?"\n'
+                '**VERDICT: NEWEST-VERDICT-21 recorded after the budget was full.**\n'
+                + ("filler line\n" * 30))
+    tmp.write_text("\n".join(body))
     p = _payload(tmp)
-    check("bounded to 3000 chars", len(p["settled_findings"]) == 3000,
-          f"len={len(p['settled_findings'])}")
-    check("newest entry kept (truncated from the TAIL, not the head)",
-          p["settled_findings"].startswith("NEWEST-VERDICT"),
-          f"start={p['settled_findings'][:24]!r}")
+    s = p["settled_findings"]
+    check("fits the budget", len(s) <= 7000, f"len={len(s)}")
+    check("bounds a 21-entry, ~11KB file", len(s) < len(tmp.read_text()),
+          f"payload={len(s)} file={len(tmp.read_text())}")
+    check("the OLDEST verdict is delivered", "SETTLED-1 " in s, f"len={len(s)}")
+    check("a MIDDLE verdict is delivered", "SETTLED-10 " in s)
+    check("the NEWEST verdict is delivered (the bug this replaces)", "NEWEST-VERDICT-21" in s)
 
 
 def test_real_file_carries_live_verdicts() -> None:
-    print("the REAL settled-findings file carries the two 2026-09-28 verdicts")
+    print("the REAL settled-findings file carries every live verdict")
     real = config.CLOSED_PROPOSALS_PATH
     check("file exists", real.exists(), str(real))
     if not real.exists():
         return
     text = real.read_text()
     p = _payload(real)
+    s = p["settled_findings"]
     for marker in ("FIXED IN CODE 2026-09-17", "NOT SUPPORTED", "NOT DRIFT"):
         check(f"verdict '{marker}' present in the file", marker in text)
-    check("both 2026-09-28 verdicts survive the 3000-char bound",
-          "FIXED IN CODE 2026-09-17" in p["settled_findings"]
-          and "NOT SUPPORTED" in p["settled_findings"],
-          f"len={len(p['settled_findings'])}")
+    check("the 2026-09-28 verdicts survive the budget", 
+          "FIXED IN CODE 2026-09-17" in s and "NOT SUPPORTED" in s,
+          f"len={len(s)}")
+    # The defect found 2026-10-19: the file is APPENDED, so a 3,000-char HEAD
+    # window silently dropped every verdict recorded after 2026-09-28.
+    n_heads = sum(1 for ln in text.splitlines() if ln.startswith("## "))
+    n_delivered = sum(1 for ln in s.splitlines() if ln.startswith("- ## "))
+    check("EVERY section is represented (not just the first two)",
+          n_delivered == n_heads, f"delivered={n_delivered} sections={n_heads}")
+    check("the newest recorded verdict is delivered",
+          "REMOVED AS A STRATEGY" in s or "TRUNCATED" in s, f"len={len(s)}")
 
 
 def test_system_prompt_forbids_re_filing() -> None:
@@ -103,7 +120,7 @@ def test_system_prompt_forbids_re_filing() -> None:
 def main() -> None:
     for fn in (test_settled_findings_key_is_always_present,
                test_short_file_is_delivered_whole,
-               test_long_file_is_bounded_from_the_head,
+               test_long_file_keeps_every_verdict_and_fits,
                test_real_file_carries_live_verdicts,
                test_system_prompt_forbids_re_filing):
         fn()
