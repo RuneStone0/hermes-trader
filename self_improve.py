@@ -27,6 +27,28 @@ import db
 
 ACCOUNTS = ("daily", "weekly", "yolo")
 
+# The nightly review is a REASONING call: deepseek-flash bills its chain of
+# thought against max_tokens, so the budget must cover reasoning PLUS the JSON.
+# MEASURED live in-container 2026-10-19 on the real payload (15,095-char user
+# message, 5,983 prompt tokens):
+#   max_tokens=4000 -> finish_reason='length', 2,559 reasoning tokens, 9,391
+#                      chars of reasoning, content truncated mid-JSON at 5,235
+#                      chars -> _extract_json could not parse it -> {}
+#   max_tokens=8000 -> finish_reason='stop',   5,253 reasoning tokens, 6,812
+#                      chars of content -> 8 lessons + 4 proposals
+# The 4000 setting made every night look like "appended 0 lessons; 0 proposals"
+# — the same starvation bug the decision path fixed with _DECISION_MAX_TOKENS,
+# never applied here. 9000 leaves headroom for a longer settled-findings tail.
+_REVIEW_MAX_TOKENS = 9000
+# Recovery for a cut-off answer: hand the model its own truncated turn back and
+# ask for the JSON alone (mirrors advisor._RETRY_ANSWER_*), small enough that a
+# failed retry can never run past the scheduler's 300s job timeout.
+_RETRY_MAX_TOKENS = 2500
+_RETRY_HANDOFF_CHARS = 6000
+_RETRY_MIN_REASONING_CHARS = 200
+_RETRY_PROMPT = ("Your JSON above was cut off by the output token limit. Do not "
+                 "continue analysing. Output ONLY the complete JSON object now.")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -247,6 +269,38 @@ def _write_overrides(clean: dict) -> None:
     tmp.replace(config.OVERRIDES_PATH)
 
 
+def parse_review(content: str) -> dict | None:
+    """Parse the reviewer's answer STRICTLY: None means "this call produced no
+    usable review at all", which the caller must journal as an error.
+
+    `advisor._extract_json` returns {} for both an empty answer and a truncated
+    one, and {} is an instance of dict — so the old code's `isinstance(out, dict)`
+    check passed on total failure and the routine printed "0 lessons, 0
+    proposals" as if the model had nothing to say. That is precisely how a
+    starved call hides for weeks. An answer only counts when it carries at least
+    one of the two keys the prompt asks for.
+    """
+    out = advisor._extract_json(content)
+    if not isinstance(out, dict) or not out:
+        return None
+    if "lessons" not in out and "proposals" not in out:
+        return None
+    lessons = out.get("lessons") or []
+    proposals = out.get("proposals") or []
+    return {
+        "lessons": [x for x in lessons if isinstance(x, dict)] if isinstance(lessons, list) else [],
+        "proposals": [x for x in proposals if isinstance(x, dict)] if isinstance(proposals, list) else [],
+    }
+
+
+def _recoverable(msg: dict) -> bool:
+    """True when the answer was CUT OFF rather than legitimately empty."""
+    if msg.get("finish_reason") == "length":
+        return True
+    return (not (msg.get("content") or "").strip()
+            and len(msg.get("reasoning") or "") >= _RETRY_MIN_REASONING_CHARS)
+
+
 def main() -> None:
     db.init_db()
     perf = _perf_summary()
@@ -300,21 +354,54 @@ def main() -> None:
     user = json.dumps(review_payload(perf, ctx, knobs), indent=2)
 
     try:
-        content = advisor.chat(system, user, temperature=0.3, max_tokens=4000)
+        msg = advisor.chat_full(system, user, temperature=0.3,
+                                max_tokens=_REVIEW_MAX_TOKENS)
     except Exception as e:
         print(f"[improve] LLM error: {e}")
         db.log_event("improve", "self_improve", "error", f"LLM error: {e}")
         return
 
-    out = advisor._extract_json(content)
-    if not isinstance(out, dict):
-        print("[improve] unparseable output (no-op)")
-        db.log_event("improve", "self_improve", "error", "unparseable LLM output")
+    out = parse_review(msg["content"])
+    if out is None and _recoverable(msg):
+        # A cut-off answer is a truncated SPIRAL, not "nothing to say": hand the
+        # model its own cut-off turn back and ask for the JSON alone.
+        print(f"[improve] answer cut off (finish={msg['finish_reason']!r}, "
+              f"content {len(msg['content'])} chars) — asking for the JSON alone")
+        try:
+            retry = advisor.chat_full(
+                system, user, temperature=0.3, max_tokens=_RETRY_MAX_TOKENS,
+                extra_messages=[
+                    {"role": "assistant",
+                     "content": (msg["content"] or msg["reasoning"])[:_RETRY_HANDOFF_CHARS]},
+                    {"role": "user", "content": _RETRY_PROMPT},
+                ])
+            out = parse_review(retry["content"])
+            if out is not None:
+                msg = retry
+        except Exception as e:
+            print(f"[improve] retry error: {e}")
+
+    if out is None:
+        # Fail CLOSED and LOUD. An unreadable answer must never be laundered
+        # into "0 lessons, 0 proposals" — that is indistinguishable from a
+        # healthy no-op and hides the loop's failure for weeks.
+        why = (f"no readable review: finish_reason={msg.get('finish_reason')!r}, "
+               f"content {len(msg.get('content') or '')} chars, "
+               f"reasoning {len(msg.get('reasoning') or '')} chars")
+        print(f"[improve] {why} — nothing written")
+        db.log_event("improve", "self_improve", "error", why)
         return
 
-    lessons = out.get("lessons") or []
-    proposals = out.get("proposals") or []
+    lessons = out["lessons"]
+    proposals = out["proposals"]
     stamp = _now()
+
+    if not lessons and not proposals:
+        # A genuine no-op is a real outcome and must be VISIBLE: otherwise a
+        # loop that has quietly stopped thinking looks identical to one that is
+        # running and finding nothing.
+        db.log_event("improve", "self_improve", "no-op",
+                     "reviewed the book and had nothing new to add")
 
     # --- 1. lessons (always just appended) ---
     if lessons:
@@ -404,7 +491,8 @@ def main() -> None:
 
     print(f"[improve] appended {len(lessons)} lessons; "
           f"Auto-tuned {len(applied_details)} setting(s); "
-          f"{len(pending)} structural proposal(s) left for review")
+          f"{len(pending)} structural proposal(s) left for review "
+          f"(finish={msg.get('finish_reason')})")
 
 
 def _deep_merge(base: dict, new: dict) -> dict:

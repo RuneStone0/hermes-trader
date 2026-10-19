@@ -47,7 +47,8 @@ _ACCOUNT_LABEL = {"daily": "Daily ORB + Mean reversion", "weekly": "Weekly pullb
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
                     "blocked": "#d29922",
-                    "fix": "#2ea043", "warn": "#d29922"}
+                    "fix": "#2ea043", "warn": "#d29922",
+                    "no-op": "#8b949e"}
 
 # Plain-English label + explanation for each journal badge. The dashboard is read
 # by a non-expert: no GO / NO_GO / EXIT shorthand, and every badge carries a
@@ -63,6 +64,7 @@ _DECISION_LABELS = {
     "warn":      ("Warning",   "Something looked off, but the bot carried on."),
     "fix":       ("Fixed",     "The self-healing routine corrected a problem automatically."),
     "apply":     ("Tuned",     "The self-improvement routine adjusted a setting inside the safety limits."),
+    "no-op":     ("Nothing new", "The self-improvement routine reviewed the book and had nothing new to add this run."),
 }
 
 # Symbol -> (full name, one-line description) for the hover / tap tooltip.

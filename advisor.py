@@ -219,27 +219,57 @@ def decide(context: dict, model: str | None = None) -> dict:
             "size_multiplier": size_mult}
 
 
-def chat(system: str, user: str, model: str | None = None,
-         temperature: float = 0.2, max_tokens: int = 2000) -> str:
-    """Single-turn chat completion returning the final assistant content.
+def chat_full(system: str, user: str, model: str | None = None,
+              temperature: float = 0.2, max_tokens: int = 2000,
+              extra_messages: list[dict] | None = None) -> dict:
+    """Single-turn chat completion returning the WHOLE assistant message.
 
     Works with reasoning models (e.g. deepseek-v4-pro) that emit
-    `reasoning_content` before the final `content` — we return only `content`.
+    `reasoning_content` before the final `content` — both are returned, along
+    with `finish_reason` and `usage`. `chat()` remains the content-only wrapper.
+
+    Why this exists: a caller that only sees `content` cannot tell a genuine
+    empty answer from a call that burned the whole budget on reasoning and got
+    truncated (`finish_reason='length'`, content cut mid-JSON). Both arrive as
+    a string that `_extract_json` turns into {} — the nightly self-improve loop
+    read that as "nothing to say" for 14+ nights (measured 2026-10-19: at
+    max_tokens=4000 the same payload returns finish_reason='length', 2,559
+    reasoning tokens and truncated content; at 8000 it returns 8 lessons and 4
+    proposals). A caller that has work to do with the answer must use this.
     """
     if not config.DEEPSEEK_API_KEY:
         raise AdvisorError("No DEEPSEEK_API_KEY configured")
 
     model = model or config.LLM_MODEL
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    messages.extend(extra_messages or [])
     body = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
     data = _post(body, timeout=120)
 
-    msg = (data.get("choices") or [{}])[0].get("message", {})
-    return msg.get("content") or ""
+    choice = (data.get("choices") or [{}])[0] or {}
+    msg = choice.get("message") or {}
+    return {
+        "content": msg.get("content") or "",
+        "reasoning": msg.get("reasoning_content") or "",
+        "finish_reason": choice.get("finish_reason"),
+        "usage": data.get("usage") or {},
+    }
+
+
+def chat(system: str, user: str, model: str | None = None,
+         temperature: float = 0.2, max_tokens: int = 2000) -> str:
+    """Single-turn chat completion returning only the final assistant content.
+
+    Works with reasoning models (e.g. deepseek-v4-pro) that emit
+    `reasoning_content` before the final `content` — we return only `content`.
+    """
+    return chat_full(system, user, model=model, temperature=temperature,
+                     max_tokens=max_tokens)["content"]

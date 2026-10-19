@@ -69,6 +69,7 @@ def main() -> None:
     # 1. Already positioned? The stop/target bracket decides the exit — NO
     #    forced time-stop. A position may be held overnight (bracket is GTC).
     if SYMBOL in positions:
+        print(f"[weekly] holding {SYMBOL} — the bracket decides the exit")
         db.log_event(ACCOUNT, "weekly_pullback", "skip", "already positioned", dedup=True)
         return
 
@@ -103,6 +104,8 @@ def main() -> None:
         setup = {"side": "short", "entry": entry, "stop": stop, "target": target,
                  "trend": "downtrend"}
     if not setup:
+        print(f"[weekly] no setup: {last:.2f} vs 100d-SMA {sma100:.2f} "
+              f"(ATR {atr14:.2f}) — not within 1x ATR of the SMA")
         db.log_event(ACCOUNT, "weekly_pullback", "skip", "no pullback to SMA today", dedup=True)
         return
 
