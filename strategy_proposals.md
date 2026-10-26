@@ -541,3 +541,112 @@ proposals, 8 lessons). Dispositions, each with the measurement:
 5. **Note for the next review:** 7 of 23 YOLO rows still have `entry_time = NULL`
    (all pre-2026-09-17), which is why the regime split covers 16 of 23. Not worth a
    deploy; do not quote a "23-trade regime split" without saying so.
+
+## 2026-10-26 12:00 UTC — WEEKLY REVIEW (week of 2026-10-19 → 10-23)
+
+### The week in numbers (R first, dollars second, SPY as the yardstick)
+
+| book | closed (all time) | sum R | avg R | 95% CI on avg R | week's closes | week R | equity | vs SPY* |
+|---|---|---|---|---|---|---|---|---|
+| daily_orb | 1 | +0.21 | +0.21 | n=1, no CI | 0 | — | −0.10% | **+0.71pp** |
+| weekly_pullback | 0 | — | — | — | 0 | — | 0.00% | **+0.81pp** |
+| mr_rsi2 | 6 | −0.91 | −0.151 | [−0.57, +0.27] | 2 | −0.70 | — | — |
+| yolo | 30 | −2.38 | −0.079 | [−0.49, +0.33] | 7 | −0.44 | −1.10% | −0.29pp |
+
+\* SPY buy-and-hold 2026-09-08 → 10-23 = **−0.81%**; the week 10-16 → 10-23 = −0.46%.
+
+Nine closes this week for **−1.14R / −$31.34** net. Nothing is broken: no error or
+warn events since 2026-10-19, all four broker positions match the DB exactly
+(XLF 14, XLV 3, XLU 16, MSFT 1), and every journal line has a matching trade row.
+
+**Classification: (b) sample too small to tell — with one caveat and one exception.**
+
+- YOLO is now at n=30 and its avg R is **−0.079 ± 0.17** (sd 1.14R, 95% CI
+  [−0.49, +0.33]). That CI contains zero: the book is *not measurably bad*, and it is
+  not measurably good either. MR at n=6 is hopeless to read; ORB at n=1 ditto.
+- The caveat: the **shape** is not neutral. Median offered excursion 0.310R, only
+  9/30 trades ever reached +1R, and the payoff geometry (1.68:1) needs a **37.2%**
+  win rate to break even against the 33.3% delivered. So (a) "no edge in this
+  regime" is not excluded — it is just not convicted.
+- The exception is a demonstrable defect, and it is in the *measurement*, not the
+  trading: see below. It is the only thing this week that justified a code change.
+
+### The one change this week: the excursion columns were measured on the wrong prices (v1.6.6)
+
+`r_telemetry` fetched its 5-min window with `adjustment="all"` (split **and dividend**
+adjusted) while entry/stop/exit on a trade row are the RAW prices the broker filled.
+For a dividend payer that shifts the whole window by the cumulative dividend — a few
+tenths of a percent of price, which on a 0.4%-wide stop is ~1.8R, sign flipped for
+shorts. Same window, same bars, asked twice:
+
+| trade | stored MFE (adjusted) | raw MFE |
+|---|---|---|
+| XLU short 2026-09-08 (0.40% stop) | **+2.052R** | **+0.228R** |
+| XLB long 2026-09-08 (0.55% stop) | −0.484R | +0.328R |
+| XLP short 2026-09-09 | +0.474R | +0.150R |
+| SPY short (daily_orb, 0.48% stop) | +0.878R | **+0.356R** |
+
+Every stored value reproduced the adjusted measurement exactly — a systematic bias,
+not noise. Two narratives this system has been carrying die with it: the XLU short was
+never offered +2.05R (it was never offered more than +0.23R), and DAILY's trim kept
+**60%** of its offer, not 24%. Shipped as c08971e / VERSION 1.6.6, verified in the live
+container, all **37 closed rows re-measured** on raw bars (`r_telemetry.py backfill
+--force`), pinned by `tests/test_r_telemetry.py::test_excursions_use_raw_bars`.
+
+Post-fix aggregates barely moved for YOLO (median MFE 0.355 → 0.310, capture −0.106 →
+−0.114) because most of its symbols paid no dividend inside the hold. The damage was
+concentrated in the tight-stop trades, i.e. exactly where a bad MFE reading does the
+most damage to an argument about R.
+
+### Dispositions (all four are now settled findings #19-#22)
+
+1. **"Bank half at +0.35R" → REJECTED BY REPLAY.** A bar-path replay over all 30 closed
+   YOLO rows (`probes/replay_exit_rule.py`, added this week) prices the change at
+   **−2.09R** at 0.35R, and it is negative at *every* level from 0.25R to 1.00R
+   (−0.79R at 0.25R, −2.86R at 0.50R). It helps 6 round-trippers +2.80R and costs 7
+   runners −4.88R — the right tail is the whole book. Chronologically: −0.18R on the
+   first 15 trades, −1.90R on the last 15. The proposal's own falsifier fired.
+2. **"Require >= 0.5R of ATR headroom at entry" → NOT SUPPORTED.** The split it rests
+   on is look-ahead (MFE is known only after the entry). The one pre-entry proxy it
+   names measures the **wrong sign**: r(headroom_atr, MFE) = **−0.372** (n=21), and
+   headroom >= 2×ATR reached 0.5R only 25% of the time vs 47% for tighter entries. The
+   same variable at scale (35,701 symbol-sessions, range position) is −0.002R
+   [−0.023, +0.019]. Fifth entry-gate family measured empty on this data.
+3. **"Judge on capture, not win rate" → ACCEPTED as a reporting convention**, with the
+   explicit caveat that capture is a *descriptor*: #1 above shows what happens when you
+   treat a low capture as an instruction to sell earlier — you cap the tail that pays
+   for the losses.
+4. **"Telemetry is trustworthy"** → was false, now fixed (above), recorded as #22.
+
+### What did NOT change, and why
+
+No strategy parameter moved. YOLO crossed the 30-closed-trade gate this week and the
+nightly routine still auto-applied **0 settings** (10-22 and 10-23 runs: 7 lessons +
+2-3 proposals each, `finish=stop`, so the loop is thinking and not truncated). That is
+correct: at this sample its own measurement noise (SE 0.21R) is larger than any effect
+it could tune. Nothing was tightened or loosened in RISK_GOV, EVENT_GUARD or the floor.
+
+**Watch item for the tuner:** the gate is now exactly at the sample size whose 95% CI
+on avg R spans ±0.17R. If the nightly routine applies a YOLO knob change before ~60
+closed trades, that change is unvalidatable by construction — read it as noise and
+hold it rather than defending it.
+
+### Watch next week
+
+- **Four HIGH-impact events in four sessions**: Durable Goods Tue 10-27 12:30Z, FOMC
+  decision Wed 10-28 18:00Z + presser 18:30Z, then GDP/Core PCE/Personal Income Thu
+  10-29 12:30Z. YOLO is at **4/4 concurrent slots** (XLF, XLV, XLU, MSFT) with a
+  drawdown of 1.1% (so it sizes at full allowed size), meaning it cannot rotate into
+  risk and its gap risk into FOMC is the
+  book's largest single exposure. That is not a reason to flatten (no loosening, and a
+  forced exit is a *new* unevidenced rule) — it is the reason to read any −1R+ print
+  next week as event gap, not as exit failure.
+- The post-fix **sane-stop cohort** (stop >= 1.0 ATR): 23 trades, **+5.55R, avg
+  +0.241R**, 10 wins. It was +6.00R / +0.375R at n=16 two weeks ago; the 7 trades added
+  since (XLP +1.08, IWM +0.23, QQQ −0.35, SMH −0.12, AAPL −0.33, XLE −1.00, TLT +0.06)
+  sum to **−0.43R**. The earlier "the live rule is the positive half" reading is
+  decaying toward zero as n grows — which is what a t=1.19 was always likely to do.
+  Do not quote +0.375R again; quote +0.241R at n=23.
+- mr_rsi2 reaches n=6 only: its backtest edge (+0.116R vs a +0.036R mechanical control,
+  n=775) remains the only *measured* edge in the system and the live sleeve has not
+  reproduced it. Not actionable at n=6 — but it is the number that matters in a month.
