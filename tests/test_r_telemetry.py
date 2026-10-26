@@ -66,9 +66,11 @@ class FakeBars:
     def __init__(self, five: list, daily: list):
         self.five, self.daily = five, daily
         self.calls: list[tuple] = []
+        self.kwargs: list[dict] = []
 
     def bars(self, symbol, timeframe="1Day", limit=100, start=None, end=None, **kw):
         self.calls.append((symbol, timeframe, limit, start, end))
+        self.kwargs.append(dict(kw))
         series = self.five if timeframe == "5Min" else self.daily
         out = []
         for b in series:
@@ -288,6 +290,28 @@ def test_capture_uses_the_measured_subset_only() -> None:
           f"{s['total_R']}")
 
 
+def test_excursions_use_raw_bars() -> None:
+    """The excursion window must ask for RAW (unadjusted) prices.
+
+    `bars()` defaults to adjustment="all", i.e. split+dividend adjusted. Entry,
+    stop and exit on a trade row are the RAW prices the broker filled, so an
+    adjusted series measures a different asset: for a dividend payer the whole
+    window is shifted by the cumulative dividend, which is a few tenths of a
+    percent of price and therefore a large FRACTION OF R on a tight stop.
+    Measured live 2026-10-26: XLU short stored MFE +2.052R (adjusted) against
+    +0.228R (raw) on a 0.40%-wide stop. Nothing enforces this except the call.
+    """
+    print("5-min excursion window is fetched with adjustment='raw'")
+    five = [_b("2026-09-08T14:35:00Z", 101.0, 99.5), _b("2026-09-08T14:40:00Z", 102.0, 100.5)]
+    fake = FakeBars(five, [])
+    t = {"symbol": "ZZZ", "side": "long", "entry_price": 100.0, "stop_price": 98.0, "qty": 1}
+    t0 = r_telemetry._ts("2026-09-08T14:30:00Z")
+    t1 = r_telemetry._ts("2026-09-08T15:00:00Z")
+    r_telemetry._bars_in_window(fake, t, t0, t1)
+    adj = [k.get("adjustment") for k in fake.kwargs if k]
+    check("5-min window requests raw prices", adj == ["raw"], f"adjustment={adj}")
+
+
 def test_risk_per_share_edges() -> None:
     print("risk unit edges: no stop / zero-width stop never divide")
     check("null stop -> None",
@@ -305,7 +329,7 @@ def main() -> int:
                test_stop_atr, test_flat_range_gives_expected_atr, test_entry_ts_fallback,
                test_truncation_retry, test_capture_uses_the_measured_subset_only,
                test_backfill_idempotent, test_stats_and_not_measured,
-               test_risk_per_share_edges):
+               test_excursions_use_raw_bars, test_risk_per_share_edges):
         print(f"\n{fn.__name__}")
         fn()
     print()

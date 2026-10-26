@@ -112,6 +112,18 @@ def _bars_in_window(client: AlpacaClient, t, t0: datetime, t1: datetime) -> list
       2. Windows reaching today 403 on the default feed; that is handled in
          alpaca_rest.bars() (explicit feed=iex) — end is clamped to now here
          because no bar after this moment can belong to the trade.
+      3. **`adjustment="raw"` is load-bearing.** `bars()` defaults to `"all"`
+         (split + DIVIDEND adjusted), and an adjusted series is priced against
+         TODAY's dividend-adjusted basis while `entry_price` / `stop_price` /
+         `exit_price` are the raw prices the broker actually filled. Measured
+         2026-10-26 against the live DB: XLU short id=4 (entry 43.50, stop
+         43.675, a 0.40% stop) stored MFE **+2.052R** on adjusted bars vs
+         **+0.228R** on raw bars — a cumulative dividend worth ~0.7% of price is
+         ~1.8R on a stop that tight. The error is (dividend / stop distance), so
+         it is largest exactly on the tight-stop trades whose exit quality this
+         layer exists to judge, and it flips sign: longs get their MFE
+         understated and MAE overstated, shorts the reverse. Only RAW bars are
+         comparable with a raw fill; indicators (SMA/ATR) still want adjusted.
     """
     start = (t0 - timedelta(days=2)).strftime("%Y-%m-%d")
     end_dt = min(t1, datetime.now(timezone.utc))
@@ -122,7 +134,7 @@ def _bars_in_window(client: AlpacaClient, t, t0: datetime, t1: datetime) -> list
     for _ in range(3):
         try:
             data = client.bars(t["symbol"], timeframe="5Min", limit=limit,
-                               start=start, end=end)
+                               start=start, end=end, adjustment="raw")
         except AlpacaError:
             return []
         got = (data or {}).get("bars") or []
@@ -378,9 +390,11 @@ def main() -> int:
     cmd = args[0] if args else "report"
     if cmd == "backfill":
         db.init_db()
-        acct = args[1] if len(args) > 1 else None
-        n = backfill(acct)
-        print(f"[telemetry] filled {n} row(s)")
+        rest = [a for a in args[1:] if not a.startswith("--")]
+        force = "--force" in args
+        acct = rest[0] if rest else None
+        n = backfill(acct, force=force)
+        print(f"[telemetry] filled {n} row(s)" + ("  (forced re-measure)" if force else ""))
         return 0
     out = None
     if "--out" in args:
