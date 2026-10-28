@@ -38,12 +38,24 @@ ACCOUNTS = ("daily", "weekly", "yolo")
 #                      chars of content -> 8 lessons + 4 proposals
 # The 4000 setting made every night look like "appended 0 lessons; 0 proposals"
 # — the same starvation bug the decision path fixed with _DECISION_MAX_TOKENS,
-# never applied here. 9000 leaves headroom for a longer settled-findings tail.
-_REVIEW_MAX_TOKENS = 9000
+# never applied here. 9000 left headroom for a longer settled-findings tail, but
+# the spiral GREW past it: 2026-10-28 measured finish_reason='length' with
+# content 4,750 chars and reasoning 27,349 chars (~9k completion tokens burned,
+# nothing parseable) — the night's review was lost.
+# Re-measured the SAME payload (16,049 chars / 5,042 prompt tokens) 2026-10-28:
+#   max_tokens=20000 -> finish_reason='stop', 6,373 completion tokens
+#                       (4,459 reasoning + ~1,900 content), 6,940 chars,
+#                       10 lessons + 3 proposals, 39.8 s
+# so 20000 is the measured-sufficient budget. Provider accepts it (probed at
+# 9k/16k/32k, all 'stop'); a full call is ~40 s, well inside the 300 s job.
+# Reasoning in this model is UNBOUNDED in practice — if a night's content is
+# empty at 20000 too, do not just raise the number again: cut the payload
+# (settled_findings/existing_proposals are the growth terms).
+_REVIEW_MAX_TOKENS = 20000
 # Recovery for a cut-off answer: hand the model its own truncated turn back and
 # ask for the JSON alone (mirrors advisor._RETRY_ANSWER_*), small enough that a
 # failed retry can never run past the scheduler's 300s job timeout.
-_RETRY_MAX_TOKENS = 2500
+_RETRY_MAX_TOKENS = 4000
 _RETRY_HANDOFF_CHARS = 6000
 _RETRY_MIN_REASONING_CHARS = 200
 _RETRY_PROMPT = ("Your JSON above was cut off by the output token limit. Do not "

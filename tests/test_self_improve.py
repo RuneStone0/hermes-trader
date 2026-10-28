@@ -46,8 +46,11 @@ def test_budget_covers_reasoning_plus_answer() -> None:
           self_improve._REVIEW_MAX_TOKENS >= 8000,
           f"_REVIEW_MAX_TOKENS={self_improve._REVIEW_MAX_TOKENS}")
     check("retry budget is small enough to stay inside the 300s job timeout",
-          0 < self_improve._RETRY_MAX_TOKENS <= 3000,
+          0 < self_improve._RETRY_MAX_TOKENS <= 6000,
           f"_RETRY_MAX_TOKENS={self_improve._RETRY_MAX_TOKENS}")
+    # Timing basis (measured 2026-10-28, in-container, real payload): a full
+    # 20,000-token review call returned finish='stop' in 39.8 s. A 4,000-token
+    # retry is a fraction of that, so the 300 s scheduler timeout is not at risk.
 
 
 def test_parse_review_rejects_truncated_and_empty() -> None:
