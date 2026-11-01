@@ -24,7 +24,7 @@ RUN if git rev-parse --short HEAD >/dev/null 2>&1; then \
 RUN [ -s /commit.txt ] || printf 'unknown' > /commit.txt
 
 # Stage 2: runtime.
-FROM python:3.11-slim
+FROM python:3.15-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 
