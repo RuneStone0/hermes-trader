@@ -1,0 +1,23 @@
+# Dependabot: version updates. Security updates are enabled separately
+# via the repo vulnerability-alerts / automated-security-fixes APIs.
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    groups:
+      docker-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "docker"
+    labels:
+      - "dependencies"
