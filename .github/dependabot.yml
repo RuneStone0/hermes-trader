@@ -21,5 +21,3 @@ updates:
       prefix: "docker"
     labels:
       - "dependencies"
-
-# deploy-skip probe: .github-only change, should fast-forward WITHOUT rebuild
