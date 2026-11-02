@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timedelta, timezone
 
 import advisor
 import config
 import db
 import guards
+import indicators
 import wording
 from alpaca_rest import AlpacaClient, AlpacaError
 
@@ -63,6 +65,35 @@ def _ref_price(client: AlpacaClient, sym: str) -> float | None:
     except AlpacaError:
         return None
     return float(bars[-1]["c"]) if bars else None
+
+
+def _stop_atr_ratio(client, sym: str, risk_dist: float, when: datetime | None = None) -> float | None:
+    """|ref - stop| / ATR(14) on daily bars — the SAME metric r_telemetry stores as
+    `trades.stop_atr`, so the live guard and the telemetry can never disagree.
+
+    Measured 2026-11-02 (reports/stop_distance_2026-11-02.md): over 7,801 mechanical
+    uptrend entries in the 19-ETF universe, a 0.15-ATR stop returns -0.357R (t -24.4)
+    against +0.050R at 1.0 ATR and +0.091R at 2.5 ATR. A stop inside one day's
+    average range is a coin flip, not a trade.
+    """
+    if risk_dist <= 0:
+        return None
+    when = when or datetime.now(timezone.utc)
+    try:
+        data = client.bars(sym, timeframe="1Day", limit=60,
+                           start=(when - timedelta(days=120)).strftime("%Y-%m-%d"),
+                           end=(when + timedelta(days=2)).strftime("%Y-%m-%d"))
+    except Exception:      # any feed failure = unknown geometry = the caller rejects
+        return None
+    day = when.strftime("%Y-%m-%d")
+    seq = [b for b in (data or {}).get("bars") or [] if str(b.get("t"))[:10] <= day]
+    if len(seq) < 15:
+        return None
+    atrs = indicators.atr(seq, 14)
+    atr = atrs[-1] if atrs else None
+    if not atr or atr <= 0:
+        return None
+    return risk_dist / float(atr)
 
 
 def _earnings_block(client, sym: str) -> str | None:
@@ -183,6 +214,31 @@ def _open_action(client, a, equity, buying_power, positions, dry_run,
         db.log_event(ACCOUNT, "yolo", "no_go",
                      f"{sym}: stop {stop:.2f} too close to live price {ref:.2f}")
         return False
+
+    # ATR stop floor: the % buffer above only guarantees the bracket is legal, not
+    # that the stop is OUTSIDE the instrument's own daily noise. This is the hole
+    # the 2026-09-17 "ATR-scaled stops" fix left open — it lives in the prompt, not
+    # in code — and the live book shows it: 7 entries with a stop under 1.0 ATR went
+    # 0/7 for -7.94R (NVDA 0.86 ATR on 10-06 and AMZN 0.98 on 10-09 came AFTER the
+    # fix). Reject the entry rather than widening the stop: widening it at the same
+    # qty would RAISE dollar risk, which this review may not do.
+    min_atr = float(config.YOLO.get("min_stop_atr", 0) or 0)
+    if min_atr > 0:
+        satr = _stop_atr_ratio(client, sym, abs(ref - stop))
+        if satr is None:
+            # Data gap, not "no information": an unknown stop geometry is what the
+            # guard exists to prevent, and the next 30-min tick retries.
+            print(f"[yolo] reject {sym}: ATR unavailable, refusing to size a stop blind")
+            db.log_event(ACCOUNT, "yolo", "no_go",
+                         f"{sym}: ATR(14) unavailable — cannot verify the stop is "
+                         f"outside daily noise")
+            return False
+        if satr < min_atr:
+            print(f"[yolo] reject {sym}: stop is {satr:.2f} ATR, floor is {min_atr:.2f}")
+            db.log_event(ACCOUNT, "yolo", "no_go",
+                         f"{sym}: stop {abs(ref - stop):.2f} is only {satr:.2f} ATR "
+                         f"from the live price (floor {min_atr:.2f}) — inside the noise")
+            return False
 
     target = _to_price(a.get("target"), ref)
     risk_dist = abs(ref - stop)

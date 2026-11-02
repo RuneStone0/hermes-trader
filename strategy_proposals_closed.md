@@ -32,6 +32,23 @@ realised -1.04R). Every trade opened since 2026-09-14 is at 1.1-3.0 ATR. The
 2026-09-17 fix that validates bracket geometry against the LIVE price with a
 minimum distance is visible in the data and working.
 
+**AMENDMENT 2026-11-02 — the defect was only half-fixed, and is now closed in code
+(VERSION 1.6.7).** The verdict above was too generous on one point: the
+2026-09-17 fix is a *% of live price* floor (`min_stop_dist_pct = 0.002`) plus
+prompt wording, NOT an ATR-denominated check. New measurement that overturns
+"every trade opened since 2026-09-14 is 1.1-3.0 ATR": NVDA opened **0.86 ATR** on
+2026-10-06 (−1.26R) and AMZN **0.98 ATR** on 2026-10-09 (−0.77R) — both after the
+fix. The whole sub-1.0-ATR cohort is 7 trades, **0 wins, −7.94R**, while the
+≥1.0-ATR cohort (n=26) is **+8.17R / +0.314R avg**. Mechanism measured at scale
+(`reports/stop_distance_2026-11-02.md`): 7,801 mechanical uptrend entries at a
+0.15-ATR stop return **−0.357R** (t −24.4), versus +0.050R at 1.0 ATR and +0.091R
+at 2.5 ATR, same ordering out-of-sample. Fixed in code: `config.YOLO["min_stop_atr"]
+= 1.0`, enforced in `yolo_run._open_action` as a fail-closed REJECT (never by
+widening the stop, which would raise dollar risk at the same qty), pinned by
+`tests/test_yolo_stop_atr.py`. The knob is deliberately NOT in `YOLO_TUNE`.
+Residual: the guard fixes the *floor*, not the entry signal — a 1.0-2.5 ATR stop
+still only yields +0.05 to +0.09R in the mechanical control.
+
 ## 2. "Gate long entries on own-instrument trend + non-negative 5d RS vs SPY (when breadth is narrow)"
 **VERDICT: TESTED 2026-09-28 — NOT SUPPORTED. Do not re-propose without new data.**
 
@@ -453,6 +470,58 @@ which is exactly where it does the most harm to a reading of R.
 
 **Falsifier:** a stored `mfe_r` that does not equal a fresh raw-bar measurement of
 the same window.
+
+---
+
+## 23. "Total R (+0.24) and net PnL (−$90.31) on YOLO disagree — the R denominator must be mis-computed, and every R-based judgement needs restating"
+**VERDICT: MEASURED 2026-11-02 — the R DENOMINATORS ARE CORRECT; the gap is a unit
+conversion error in the question, not a defect. Do not re-propose "audit the R math".**
+
+Evidence — every one of the 33 closed YOLO rows recomputed from the journal as
+`net_pnl / (|entry − stop| × qty)` (probe on the live DB, 2026-11-02):
+- recomputed Σ R = **+0.245** (the reported `total_R` is +0.24) — it reproduces exactly;
+- Σ net = **−$90.31**, Σ initial dollar risk = **$563.27**, so mean 1R = **$17.07**
+  over a range of **$3.18 → $52.24 (16.4×)**;
+- the per-trade notional cap is **not** binding: position notionals run $263-$795
+  against a $2,500 cap (`max_position_pct` 0.25 of ~$10k), and realised risk is
+  0.03-0.52% of equity against a 2% cap. The binding dial is the LLM's own
+  `size_pct`, not the cap the question blamed.
+
+So `total_R` sums unitless R (each trade weighted equally) while the dollar total
+weights each trade by its own (arbitrary) risk. Neither is wrong; they answer
+different questions. Is the sizing informative? `corr(risk $, R) = −0.20`
+(t = −1.15, n=33) — **indistinguishable from noise**, and the risk quartiles are
+non-monotonic (−0.52R / +0.69R / +0.38R / −0.47R), so there is no evidence the
+model's conviction sizes carry information either way. Consequence: the account's
+−0.90% is a sizing tilt, not an edge measurement, and `total_R` remains the
+correct unit for EDGE — but it must never be quoted as an economic result.
+
+**Falsifier:** a stored `total_R` that does not equal Σ `net_pnl / (|entry−stop| × qty)`,
+or a documented case where the notional cap actually clamps an entry.
+
+## 24. "YOLO's low-MFE cohort clusters in SPY-below-20d / low-ATR entry-time tape, so a regime-conditional stand-down would fix the flat capture"
+**VERDICT: RETIRED 2026-11-02 — direction is opposite to the hypothesis and the
+buckets are confounded with calendar time. Do not re-propose tape-state bucketing.**
+
+Evidence — all 26 closed YOLO rows with an `entry_time` (7 pre-2026-09-17 rows have
+none), bucketed on the last completed session BEFORE the entry (no look-ahead),
+SPY distance-to-20d and SPY ATR14 percentile over a trailing 250 sessions:
+- SPY < −1% vs 20d: n=6, avgR **+0.156** (med MFE 0.209)
+- SPY −1..0%: n=9, avgR **+0.464** (med MFE 0.288)
+- SPY > 0%: n=11, avgR **+0.275** (med MFE 0.505)
+- ATR%ile < 33: n=11, avgR **+0.609** — the BEST bucket, i.e. the opposite of "the
+  low-ATR tape is where follow-through stalls"
+- ATR%ile 33-66: n=15, avgR +0.096
+
+No SPY bucket holds ≥10 closes, so the proposal's own `n≥10` condition fails on the
+dimension it cared about; the ATR dimension is confounded (every low-ATR entry is
+from Sep-early Oct, the period when the book was winning, so the "bucket" is a
+calendar split, not a tape state). Under n=26 and SE ≈ 0.23R per bucket this is
+unresolvable by construction. No regime gate is filed.
+
+**Falsifier:** ≥10 closes in a single SPY-distance bucket, accumulated across a tape
+regime the current sample does not contain, showing that bucket ≥0.25R worse than
+the best with a CI excluding zero.
 
 ---
 

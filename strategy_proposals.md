@@ -650,3 +650,139 @@ hold it rather than defending it.
 - mr_rsi2 reaches n=6 only: its backtest edge (+0.116R vs a +0.036R mechanical control,
   n=775) remains the only *measured* edge in the system and the live sleeve has not
   reproduced it. Not actionable at n=6 — but it is the number that matters in a month.
+
+## 2026-11-02 12:00 UTC — WEEKLY REVIEW (week of 2026-10-26 → 10-30)
+
+### The week in R, and against SPY buy-and-hold
+
+| book | closes | ΣR | net $ | week % | SPY same week | since 2026-09-08 | SPY same window |
+|---|---|---|---|---|---|---|---|
+| daily_orb (daily acct) | 0 | — | $0.00 | 0.00% | −0.54% | −0.10% | −1.10% |
+| weekly_pullback | 0 | — | $0.00 | 0.00% | −0.54% | 0.00% | −1.10% |
+| yolo (+ mr_rsi2) | 3 | **+2.61R** | **+$39.67** | **+0.55%** | −0.54% | −0.61% | −1.10% |
+
+YOLO's three closes: XLV +2.36R (+$31.51, target), MSFT +0.36R (+$8.53), XLP
+−0.11R (−$0.37). Two new entries (XLP 3 sh on 10-29 at 50% size into Core PCE;
+XLE 11 sh on 10-30). Book now 4/4 slots: 25.4% notional, **0.61% open risk**,
++$28.96 unrealised. Daily: 4 no_go + 1 FOMC block; weekly: 1 no_go.
+
+**Read this honestly: all three books "beat" SPY this week by not being long.**
+YOLO carries 25% notional and the other two are 100% cash, so a −0.54% SPY week
+flatters all of them. That is a beta artifact, not alpha — the same construction
+would have *lost* to SPY by the same margin in an up week. The only claim the
+table supports is that nothing blew up, and that one runner (XLV, 80% of the
+week's dollars) paid for the week.
+
+### Classification: (c) ONE demonstrable defect — found by overturning a settled verdict — and (b) too small to tell for everything else
+
+**(c) The defect: YOLO's noise-tight-stop fix was only half in code.** Settled
+finding #1 recorded the 2026-09-17 stop fix as done, on the evidence that "every
+trade opened since 2026-09-14 is 1.1-3.0 ATR". That claim is false as of this
+week's data: NVDA opened at **0.86 ATR** (2026-10-06, −1.26R) and AMZN at
+**0.98 ATR** (2026-10-09, −0.77R). The reason is mechanical — the only
+deterministic guard was `min_stop_dist_pct = 0.002`, a *% of price* floor that on
+a 1.3%-ATR ETF is a ~0.15-ATR stop. The ATR scaling lived in the prompt, not in
+code. Measured: the whole sub-1.0-ATR cohort is 7 trades, **0 wins, −7.94R**,
+against **+8.17R / +0.314R avg** for the ≥1.0-ATR cohort (n=26). Note the whole
+book is +0.245R, so those 7 trades are the difference between "breakeven" and
+"+0.4R avg".
+
+**(b) Everything else is sample-limited, and the limit is now the finding.** YOLO
+is 33 closes at avgR **+0.007R** with SD 1.153R → 95% CI **±0.39R**. To resolve
+an edge of +0.10R at that variance you need **~511 closes** (≈2.5 years at the
+current ~4/week); +0.30R needs ~57. So the book cannot distinguish "coin flip"
+from "modestly profitable" inside any horizon the user cares about, and *no*
+knob change on this book is verifiable before ~n=60. mr_rsi2 is n=6 (live
+−0.151R) against a backtest of +0.116R vs a +0.036R control — still the only
+*measured* edge in the system and still unreproduced live. daily_orb n=1,
+weekly_pullback n=0 (settled #15: rare, not broken). Not a regime mismatch this
+week: the bot correctly stood down in a trend_down tape and still made money.
+
+### The one change: a deterministic ATR stop floor (VERSION 1.6.7)
+
+`config.YOLO["min_stop_atr"] = 1.0`, enforced in `yolo_run._open_action` as a
+**fail-closed rejection** (it refuses the entry; it never widens the stop, which
+at the same qty would raise dollar risk). Rationale and numbers in
+`reports/stop_distance_2026-11-02.md`: over 7,801 mechanical uptrend entries in
+the 19-ETF universe (2020-07 → 2026-10), same signal, only stop/target width
+varying —
+
+| stop | n | win% | avgR | t | 2023+ half |
+|---|---|---|---|---|---|
+| 0.15 ATR | 7801 | 23.7 | −0.357 | −24.4 | −0.366 |
+| 0.35 ATR | 6384 | 32.5 | −0.099 | −5.4 | −0.107 |
+| 0.50 ATR | 5213 | 34.4 | −0.041 | −2.0 | −0.041 |
+| 1.00 ATR | 2887 | 39.9 | +0.050 | +1.9 | +0.073 |
+| 1.50 ATR | 2190 | 47.2 | +0.080 | +3.1 | +0.112 |
+| 2.50 ATR | 1866 | 54.1 | +0.091 | +4.5 | +0.127 |
+
+Monotone, same ordering out-of-sample; 1.0 ATR vs 0.15 ATR = **+0.406R/trade**.
+The floor is set at the zero-crossing (1.0), not at the best cell (1.5/2.5) —
+choosing 1.5 after seeing the data would be fitting to n=13 live trades whose CI
+spans ±0.6R. Pinned by `tests/test_yolo_stop_atr.py`; the knob is deliberately
+absent from `YOLO_TUNE` so the auto-tuner cannot lower a risk guard. When it
+fires it journals `no_go` with the ATR ratio, so the first reject is visible in
+the decision journal rather than silent.
+
+### Dispositions of the two pending items filed 2026-10-30
+
+1. **"Reconcile per-trade R denominators against realised dollars" → CLOSED,
+   denominators correct, the question's unit conversion was wrong** (settled
+   finding #23). Recomputing every row as `net_pnl / (|entry−stop| × qty)` gives
+   Σ R = **+0.245** — exactly the reported +0.24. The gap to −$90.31 exists
+   because 1R was a *different number of dollars on every trade*: mean $17.07,
+   range **$3.18-$52.24 (16.4×)**. The notional cap is **not** binding (notionals
+   $263-$795 vs a $2,500 cap; realised risk 0.03-0.52% vs a 2% cap) — the dial is
+   the LLM's own `size_pct`. `corr(risk $, R) = −0.20` (t −1.15): the model's
+   conviction sizes carry **no** measurable information, in either direction.
+2. **"Bucket realised R/MFE by entry-time SPY distance-to-20d and ATR%ile" →
+   RETIRED, direction opposite and confounded** (settled finding #24). SPY <−1%:
+   n=6 +0.156R; −1..0%: n=9 +0.464R; >0%: n=11 +0.275R. ATR%ile <33 (the bucket
+   the hypothesis expected to be worst) is the **best** at n=11 +0.609R. No SPY
+   bucket reaches n≥10 — the proposal's own kill condition — and the ATR buckets
+   are a calendar split (all low-ATR entries are Sep-early Oct, when the book was
+   winning). No regime gate filed.
+
+### PENDING (filed, NOT deployed): equal-risk sizing on YOLO
+
+Risk per trade spans 16.4× ($3.18-$52.24) on a dial the LLM sets with no measured
+skill (item 1 above). Consequence: the account's dollars are a random-weighted
+function of R — the same book is **+0.245R equal-weighted** and **−5.29R** when
+each R is priced at the average $17.07. Counterfactual: at a constant $50 risk
+(0.5% of equity) those same 33 trades would have returned **+$12.25** instead of
+−$90.31, with much lower variance. Expectancy is identical by construction; only
+the variance and the coherence of the R unit change. **Not deployed**, because
+fixing risk at 0.5% *raises* the floor on the smallest trades (0.03% → 0.5%) and
+would take 4-slot open risk from 0.61% to 2.0% — a risk-posture increase a review
+may not make unilaterally. Falsifier: 30 more closes showing the size dial has no
+information (i.e. |corr(risk$, R)| stays < 0.25 with a tighter CI), which makes
+equal-risk sizing a pure variance reduction worth taking.
+
+### What did NOT change, and why
+
+- **No strategy parameter moved.** The nightly routine auto-applied 0 settings on
+  both runs since the budget fix (10-29: 8 lessons; 10-30: 6 lessons; both
+  `finish=stop`) — the loop is healthy and not truncating; 43 runs logged in
+  total, weekends are not scheduled. At n=33 with CI ±0.39R
+  any applied knob change would be unvalidatable by construction.
+- **RISK_GOV, EVENT_GUARD, the irreducible floor and the 30-trade gate untouched.**
+  The new guard only ever removes trades.
+- **daily_orb and weekly_pullback were not "fixed".** Two of three accounts are
+  idle cash and that is the largest economic fact in the system ($20k of $30k
+  doing nothing), but "make the idle sleeve trade" is settled #15 and #12 —
+  re-proposing it needs a measurement, and an idle sleeve that is idle because
+  the setup is absent is correct behaviour, not a defect.
+
+### Watch next week
+
+- **Four HIGH-impact prints in four sessions**: ISM Manufacturing + Midterms Mon
+  11-02, JOLTS Tue 11-03, ISM Services Wed 11-04, **NFP + Unemployment Fri 11-06
+  13:30Z**. YOLO is **4/4 slots at 25.4% notional** and cannot rotate into risk;
+  any −1R+ print in this window is event gap (settled #7/#11), not an exit defect.
+- **Does the ATR guard ever fire?** Expect a `no_go` line naming the ratio. If it
+  fires repeatedly on a name the model likes, that is information about the
+  model's stop discipline, not about the guard.
+- **n=60 is the next honest checkpoint** (CI tightens to ±0.29R). Until then, the
+  only number worth quoting for YOLO is `avgR +0.007R at n=33` with its CI —
+  never the −0.61% dollars alone, and never "+0.24R" without the equal-weight
+  caveat.

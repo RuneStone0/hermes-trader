@@ -16,7 +16,7 @@ from pathlib import Path
 # App version (bumped manually on releases; shown in the dashboard footer).
 # Auto-deploy note (2026-10-19): a commit touching ONLY *.md or docs/ is
 # fast-forwarded without a rebuild. This is a code file, so editing it deploys.
-VERSION = "1.6.6"
+VERSION = "1.6.7"
 
 # --------------------------------------------------------------------------- #
 # Paths. PROFILE_HOME is pinned to the trader profile (override via TRADER_HOME)
@@ -304,6 +304,17 @@ YOLO = {
     # safety — never tune via overrides.
     "min_stop_dist_pct": 0.002,
     "min_target_dist_pct": 0.001,
+    # Minimum entry->stop distance in DAILY ATR(14) units. The % buffer above only
+    # makes a bracket legal; it does NOT keep the stop out of the instrument's own
+    # noise. Measured 2026-11-02 (reports/stop_distance_2026-11-02.md) over 7,801
+    # mechanical uptrend entries: 0.15 ATR = -0.357R (t -24.4), 0.35 = -0.099R,
+    # 0.50 = -0.041R, 1.0 = +0.050R, 1.5 = +0.080R, 2.5 = +0.091R — monotone, and
+    # the same in the 2023-2026 out-of-sample half. The live book agrees: 7 entries
+    # with a sub-1.0-ATR stop went 0/7 for -7.94R while the >=1.0-ATR cohort (n=26)
+    # is +8.17R. Enforced as a REJECT (fail-closed) in yolo_run._open_action, never
+    # by widening the stop (that would raise dollar risk at the same qty).
+    # NOT in YOLO_TUNE: a risk guard the auto-tuner can lower is not a guard.
+    "min_stop_atr": 1.0,
     # Refuse a NEW single-name entry when the name reports earnings within this
     # many days: a GTC stop does not protect an earnings gap, and the bot holds
     # overnight by default. ETF positions (no earnings) are unaffected. 0 disables.
