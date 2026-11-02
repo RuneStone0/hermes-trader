@@ -655,11 +655,14 @@ hold it rather than defending it.
 
 ### The week in R, and against SPY buy-and-hold
 
-| book | closes | ΣR | net $ | week % | SPY same week | since 2026-09-08 | SPY same window |
+| book | closes | ΣR | net $ | week % (Fri→Fri) | SPY same week | since 2026-09-08 | SPY same window |
 |---|---|---|---|---|---|---|---|
 | daily_orb (daily acct) | 0 | — | $0.00 | 0.00% | −0.54% | −0.10% | −1.10% |
 | weekly_pullback | 0 | — | $0.00 | 0.00% | −0.54% | 0.00% | −1.10% |
-| yolo (+ mr_rsi2) | 3 | **+2.61R** | **+$39.67** | **+0.55%** | −0.54% | −0.61% | −1.10% |
+| yolo (+ mr_rsi2) | 3 | **+2.61R** | **+$39.67** | **+0.58%** | −0.54% | −0.58% | −1.10% |
+
+(Equity measured at Friday 2026-10-30's close so the SPY comparison uses the same
+window; today's intraday print is 9,938.78 = −0.61%, −0.03% so far.)
 
 YOLO's three closes: XLV +2.36R (+$31.51, target), MSFT +0.36R (+$8.53), XLP
 −0.11R (−$0.37). Two new entries (XLP 3 sh on 10-29 at 50% size into Core PCE;
