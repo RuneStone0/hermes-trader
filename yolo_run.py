@@ -341,9 +341,9 @@ def _close_action(client, a, positions, dry_run,
         return False
     rationale = str(a.get("rationale") or plan_rationale or "").strip()
     print(f"[yolo] CLOSE {sym}" + (f" | {rationale[:120]}" if rationale else ""))
-    db.log_event(ACCOUNT, "yolo", "exit", wording.closed(sym),
-                 detail=(rationale[:200] or None))
     if dry_run:
+        db.log_event(ACCOUNT, "yolo", "exit", wording.closed(sym),
+                     detail=(rationale[:200] or None))
         return True
     try:
         # Cancel the bracket legs FIRST and wait for the release to settle: an
@@ -355,7 +355,35 @@ def _close_action(client, a, positions, dry_run,
             print(f"[yolo] released {released} open order(s) for {sym} before close")
     except AlpacaError as e:
         print(f"[yolo] close error {sym}: {e}")
-        db.log_event(ACCOUNT, "yolo", "error", f"{sym}: close error: {e}")
+        # The bracket legs are already released at this point, so a close the
+        # broker did not accept leaves the position NAKED. Don't wait for the
+        # next selfheal tick to notice: try to put the trade row's own stop
+        # back on (verbatim price), and journal the outcome either way. A
+        # rejected stow is a warn, not a second error — selfheal R2 owns the
+        # remaining cases (it also handles a stop the tape has already crossed).
+        row = next((t for t in db.open_trades(ACCOUNT) if t["symbol"] == sym), None)
+        stop_px = float(row["stop_price"]) if row and row["stop_price"] else None
+        try:
+            if stop_px is None or stop_px <= 0:
+                raise AlpacaError("no stop_price on record")
+            pos_qty = float(positions[sym]["qty"])
+            re_qty = int(abs(pos_qty))
+            client.submit_order({
+                "symbol": sym, "qty": str(re_qty),
+                "side": "sell" if pos_qty > 0 else "buy",
+                "type": "stop", "stop_price": f"{stop_px:.2f}",
+                "time_in_force": "gtc",
+            })
+
+            db.log_event(ACCOUNT, "yolo", "warn",
+                         f"{sym}: close failed — protective stop {stop_px:.2f} restored",
+                         detail=f"broker refused the close ({e}); stop re-attached so the "
+                                f"position is not left naked")
+        except (AlpacaError, KeyError, TypeError, ValueError) as e2:
+            db.log_event(ACCOUNT, "yolo", "warn",
+                         f"{sym}: close failed AND the stop could not be restored "
+                         f"({e2}) — selfheal will retry",
+                         detail=f"close error: {e}")
         return False
     # Stash the exit reasoning on the trade row so the closed-trade journal
     # shows the full arc: why it was opened AND why it was closed.

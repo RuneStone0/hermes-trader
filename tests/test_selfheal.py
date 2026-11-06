@@ -92,9 +92,13 @@ def _install(account: str, positions: list, orders: list, trades: list) -> None:
                        "reason": reason, "detail": detail}) or len(EVENTS))
 
 
-def _pos(symbol: str, qty: float, avg: float = 55.0) -> dict:
-    return {"symbol": symbol, "qty": str(qty), "avg_entry_price": str(avg),
-            "asset_id": "asset-1"}
+def _pos(symbol: str, qty: float, avg: float = 55.0,
+         cur: float | None = None) -> dict:
+    p = {"symbol": symbol, "qty": str(qty), "avg_entry_price": str(avg),
+         "asset_id": "asset-1"}
+    if cur is not None:
+        p["current_price"] = str(cur)
+    return p
 
 
 def _order(symbol: str, side: str, otype: str, qty: int = 35,
@@ -168,12 +172,66 @@ def test_protected_position_untouched() -> None:
     check("nothing journaled", EVENTS == [], f"events={EVENTS}")
 
 
+def test_breached_stop_closes_at_market() -> None:
+    print("R2: naked long whose stored stop the tape already crossed -> execute the stop")
+    # 2026-11-06 yolo XLP: legs released by a failed close, stored stop 89.47
+    # against a live 89.19. Re-attaching is impossible (422 'stop price must be
+    # less than current price') and retrying it every tick left the position
+    # naked; the stop's own condition was already true, so R2 exits at market.
+    _install("yolo", [_pos("XLP", 6, avg=91.49, cur=89.19)], [],
+             [{"id": 54, "account": "yolo", "symbol": "XLP", "qty": 6,
+               "stop_price": 89.47, "target_price": 95.51, "order_id": "x",
+               "note": "", "status": "open"}])
+    selfheal.selfheal_account("yolo")
+    sells = [o for o in SUBMITTED if o.get("side") == "sell"]
+    check("exactly one exit order submitted", len(sells) == 1, f"submitted={SUBMITTED}")
+    if sells:
+        check("it is an unconditional market close for the whole qty",
+              sells[0].get("type") == "market" and sells[0].get("qty") == "6",
+              f"order={sells[0]}")
+        check("no un-attachable stop was submitted",
+              [o for o in SUBMITTED if o.get("type") == "stop"] == [], f"{SUBMITTED}")
+    check("journaled as fixed, not as an error",
+          _decisions() == ["fix"], f"decisions={_decisions()}")
+    check("reason names the breached level", any("89.47" in e["reason"] for e in EVENTS),
+          f"events={[e['reason'] for e in EVENTS]}")
+
+
+def test_breached_stop_short_side() -> None:
+    print("R2: naked SHORT whose stop is already crossed above market -> buy to cover")
+    _install("yolo", [_pos("XLU", -13, avg=43.19, cur=42.70)], [],
+             [{"id": 55, "account": "yolo", "symbol": "XLU", "qty": 13,
+               "stop_price": 42.11, "target_price": 40.00, "order_id": "x",
+               "note": "", "status": "open"}])
+    selfheal.selfheal_account("yolo")
+    buys = [o for o in SUBMITTED if o.get("type") == "market"]
+    check("one market buy-to-cover", len(buys) == 1 and buys[0]["side"] == "buy",
+          f"submitted={SUBMITTED}")
+    check("journaled as fixed", _decisions() == ["fix"], f"decisions={_decisions()}")
+
+
+def test_breached_stop_outside_hours_is_not_a_market_order() -> None:
+    print("R2: stop crossed while the market is closed -> warn once, no market order")
+    _install("yolo", [_pos("XLP", 6, avg=91.49, cur=89.19)], [],
+             [{"id": 54, "account": "yolo", "symbol": "XLP", "qty": 6,
+               "stop_price": 89.47, "target_price": 95.51, "order_id": "x",
+               "note": "", "status": "open"}])
+    selfheal.AlpacaClient = type("ClosedClient", (FakeClient,), {
+        "clock": lambda self: {"is_open": False}})
+    selfheal.selfheal_account("yolo")
+    check("no order submitted", SUBMITTED == [], f"submitted={SUBMITTED}")
+    check("journaled as a warn", _decisions() == ["warn"], f"decisions={_decisions()}")
+
+
 def main() -> None:
     for fn in (test_exit_in_flight_is_left_alone,
                test_short_position_close_in_flight,
                test_naked_position_is_still_healed,
                test_opening_order_does_not_suppress_healing,
-               test_protected_position_untouched):
+               test_protected_position_untouched,
+               test_breached_stop_closes_at_market,
+               test_breached_stop_short_side,
+               test_breached_stop_outside_hours_is_not_a_market_order):
         fn()
     print()
     if FAILS:

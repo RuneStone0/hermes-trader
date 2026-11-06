@@ -179,6 +179,56 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
                 continue
             tif = config.SELFHEAL.get("open_tif", "day") if market_open \
                 else config.SELFHEAL.get("after_hours_tif", "gtc")
+            # A stop the tape has ALREADY crossed can never be attached: the
+            # broker rejects any stop on the wrong side of the market (HTTP 422
+            # 42210000 'stop price must be less than current price' — yolo XLP
+            # 2026-11-06: stop 89.47 against a live 89.19, retried and failed on
+            # every 10-minute tick for 15+ min while the position sat naked).
+            # The position is unprotected AND its stop condition is already
+            # true, so the protection that stop encodes IS a market exit —
+            # execute that instead of re-submitting an order the broker cannot
+            # book. The level is the trade row's own stop_price: nothing is
+            # invented, and nothing is closed while price is still on the safe
+            # side of it.
+            cur = p.get("current_price")
+            try:
+                cur = float(cur) if cur not in (None, "") else None
+            except (TypeError, ValueError):
+                cur = None
+            if cur is not None and ((side == "long" and stop_px >= cur)
+                                    or (side == "short" and stop_px <= cur)):
+                opp = _opposite_side(side)
+                if market_open is not True:
+                    # Outside regular hours a market exit cannot be booked;
+                    # say so ONCE instead of erroring every tick.
+                    _log(account, "warn",
+                         f"{sym}: stop {stop_px:.2f} already breached "
+                         f"(live {cur:.2f}) — market closed, exit deferred to the open",
+                         detail=f"{side} x{qty:g} is unprotected until then",
+                         dedup=True)
+                    continue
+                if dry_run:
+                    print(f"[selfheal] {account}: R2 would close {sym} at market "
+                          f"(stop {stop_px:.2f} already breached, live {cur:.2f})")
+                    continue
+                try:
+                    client.submit_order({
+                        "symbol": sym, "qty": str(int(qty)), "side": opp,
+                        "type": "market", "time_in_force": "day",
+                    })
+                except AlpacaError as e:
+                    _log(account, "error",
+                         f"{sym}: stop {stop_px:.2f} already breached "
+                         f"(live {cur:.2f}) and the exit order failed: {e}")
+                    continue
+                _log(account, "fix",
+                     f"{sym}: closed at market — stop {stop_px:.2f} already "
+                     f"breached (live {cur:.2f})",
+                     detail=(f"{side} x{qty:g}: a stop on the wrong side of the tape "
+                             f"cannot be attached, so the stop's own condition was "
+                             f"executed instead"))
+                continue
+
             tgt_px = float(t["target_price"]) if t and t["target_price"] else None
             opp = _opposite_side(side)
             detail = (f"re-attaching protective {opp} stop {stop_px:.2f}"
