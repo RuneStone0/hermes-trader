@@ -385,6 +385,13 @@ def _close_action(client, a, positions, dry_run,
                          f"({e2}) — selfheal will retry",
                          detail=f"close error: {e}")
         return False
+    # The broker accepted the close, so THIS is the moment the exit becomes a
+    # fact: journal it here and nowhere earlier. (The 2026-11-06 fix moved the
+    # line out of the pre-submit path but only into the dry-run branch, so real
+    # closes went unjournaled — yolo TLT closed 15:02:36 with a closed trade row
+    # and no exit event, found by counting dispositions against journal lines.)
+    db.log_event(ACCOUNT, "yolo", "exit", wording.closed(sym),
+                 detail=(rationale[:200] or None))
     # Stash the exit reasoning on the trade row so the closed-trade journal
     # shows the full arc: why it was opened AND why it was closed.
     try:
