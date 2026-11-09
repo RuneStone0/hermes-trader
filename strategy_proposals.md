@@ -789,3 +789,123 @@ equal-risk sizing a pure variance reduction worth taking.
   only number worth quoting for YOLO is `avgR +0.007R at n=33` with its CI —
   never the −0.61% dollars alone, and never "+0.24R" without the equal-weight
   caveat.
+
+## 2026-11-09 12:00 UTC - WEEKLY REVIEW (week of 2026-11-02 → 11-06)
+
+### The week in R, and against SPY buy-and-hold
+
+| book | closes | ΣR | net $ | week % (Fri 10-30 → Fri 11-06) | SPY same week | since 2026-09-08 | SPY same window |
+|---|---|---|---|---|---|---|---|
+| daily acct (ORB + MR) | 0 new / 7 all-time | −0.70 all-time | $0.00 (no closes) | −0.05% | −2.69% | −0.15% | −4.00% |
+| weekly_pullback | 0 | 0 | $0.00 | 0.00% | −2.69% | 0.00% | −4.00% |
+| yolo | **14** | **+1.00R** | **−$2.70** | **−0.40%** | −2.69% | −0.84% | −4.00% |
+
+Read this honestly. YOLO was **+1.00R on 14 closes and still lost $2.70**, because
+14 R is priced at whatever the model sized each trade to (1R ranged $3.18 to $52.24
+on this book). All three accounts "beat" SPY by ~2.3 to 2.7 points this week by being
+mostly cash in a −2.69% tape; the same construction loses to SPY by the same
+margin in an up week. That is a beta artifact, not alpha, and since inception the
+whole system is roughly **+3.2 points ahead of buy-and-hold on 20-25% notional**,
+which is the same artifact over a longer window.
+
+YOLO's week: 14 closes, **3 targets (+$74.71 combined)**, 2 stops, and 9
+discretionary closes of which 6 were small losses and 3 small wins. The two worst
+were XLE −0.71R (−$37.05, the week's largest dollar loss, from its largest
+position) and MSFT −1.01R. One discretionary close gave back a 1.56R peak to
+finish −0.49R (XLF 11-05). Book is 4/4 slots, **$45.42 open risk (0.46% of
+equity)**, +$8.56 unrealised.
+
+### Classification: (b) sample too small, with one measurement this week that IS conclusive, and one defect found in the REVIEW RECORD
+
+**(b) Edge is unmeasurable at this n.** YOLO is 47 closes at **avgR +0.026R**,
+SD 1.132R, 95% CI **±0.324R**. Win rate 38.3% against a break-even of 36.9%
+(avg win +1.23R, avg loss −0.72R). To resolve +0.026R at this variance you need
+~7,048 closes; to resolve +0.10R, ~511. The book is a break-even coin flip with a
+fat right tail, and no knob change on it is verifiable before n≈60. mr_rsi2 is
+n=6, avgR −0.151R, CI ±0.385R, and its payoff (avg win +0.26R / avg loss −0.57R)
+needs a 68.2% win rate at 50% delivered: fragile by construction, unmeasurable
+at n=6. daily_orb n=1, weekly_pullback n=0 (settled #15: rare, not broken).
+
+**The conclusive measurement: the exit-timing question is answered NO.** Three
+pending items (11-03, 11-05, 11-06) all asked whether the exits are too tight.
+Both halves were measured on the live book today:
+
+- **Post-exit run-on**, 47/47 closes, first five 5-min raw bars after the fill:
+  median **+0.09R** overall, **+0.04R** on the 26 discretionary closes, and
+  **+0.07R on the 14-trade MFE≥1R cohort** (1 of 14 ever reaches +0.5R). The
+  proposal's own falsifier required "time exits under 40% AND the 1R cohort's
+  median run-on below 0.5R": time exits do not exist in this book at all, and the
+  run-on is 7x to 14x below the threshold. After these exits print, the tape
+  offers nothing.
+- **Exit-reason split**: target 8 → **+16.66R**, stop 8 → −8.27R, market 26 →
+  **−1.24R**, NULL 5 → −5.90R. Every cent of the book's +1.24R is eight targets;
+  the 26 LLM discretionary closes, 55% of all closes, are worth zero in aggregate.
+- **Trailing-stop replay** on the full position (0.25R to 1.5R, bar path, no
+  intra-bar look-ahead): best cell 0.25R gives +1.92R total = **+0.041R/trade**
+  against a **±0.29R** CI on the per-trade delta, and the response curve flips
+  sign twice across adjacent fractions (+1.92, +0.45, −2.33, −5.12, −0.74,
+  +0.45). Fails the pre-registered CI test. **Not deployed.**
+
+Evidence: `reports/exit_attribution_2026-11-09.md`; probes
+`probes/post_exit_runon.py`, `probes/replay_trail_full.py`. Verdicts recorded as
+settled findings **#25** (exit-timing family closed) and **#26** (below).
+
+**(c) One defect, in the review record, not the trading code.** Prior reviews have
+been quoting "DAILY n=7, median MFE 0.293R, capture −0.399, 0/7 reaching 1R" and
+filing target-geometry proposals against `DAILY['rr_multiple']`. Those numbers
+are the **daily ACCOUNT's**, and the account's 7 closes are **1 daily_orb trade
++ 6 mr_rsi2 trades**. The ORB itself is n=1 (+0.21R, MFE 0.356R, stop 0.385 ATR,
+the tightest stop in the system). `DAILY['rr_multiple']` is read only by the ORB;
+`mr_run.py` uses `MR` geometry (2.5 ATR stop, 4 ATR cap, close-above-SMA5 exit).
+So two pending proposals would have retuned the ORB's target using a book that is
+86% a different strategy with a 6.5x wider median stop. Retired as settled #26,
+and the digest now prints per-(account, strategy) rows so "DAILY" cannot silently
+mean two things again.
+
+### What changed
+
+1. **Digest (`scripts/trader_week_digest.py`, agent-side, no deploy):** added a
+   per-sleeve R block (n, ΣR, avgR, SD, 95% CI, win %, avg win/avg loss,
+   break-even win rate, required-N) and an exit-reason split with median MFE,
+   plus the account x strategy breakdown. This implements the pending 2026-11-05
+   "publish a CI and a required-N in every report" item, which is measurement
+   only and needs no trade-off.
+2. **Digest proposals section was showing only the last 2,500 characters of a
+   100KB append-only queue**, so items from 11-02 to 11-05 were invisible to the
+   review unless it read the whole file. It now prints a per-item brief (every
+   `##` heading plus its first bolded title), so no pending item can hide.
+3. **Settled findings #25 and #26** written to `strategy_proposals_closed.md`
+   (repo and volume) so the next nightly run receives them and stops re-filing
+   the exit ledger for the third time.
+4. **No strategy parameter moved** and no risk control touched. At CI ±0.324R an
+   applied knob change could not be validated; the one change that had a
+   pre-registered test (the trail) failed it.
+
+### What did NOT change, and why
+
+- **The ATR stop floor (min_stop_atr 1.0) has not fired once**, and no entry since
+  it shipped has been rejected by it: the sub-1.0-ATR cohort is still the same 7
+  trades, all opened before 2026-10-08, and the smallest distance among trades
+  opened since is 1.18 ATR. The guard is a floor that the model's own discipline
+  is already clearing, which is the outcome we wanted; it stays as insurance.
+- **Equal-risk sizing** (filed 2026-11-02) remains NOT deployed: it raises the
+  smallest trades' risk from 0.03% to 0.5% and open risk from 0.61% to 2.0%,
+  which is a risk-posture increase a review may not make unilaterally.
+- **DAILY's 1 trade and WEEKLY's 0 trades** were not "fixed": an idle sleeve whose
+  setup did not appear is correct behaviour (settled #12, #15).
+
+### Watch next week
+
+- **Tue 11-10 CPI / Core CPI at 13:30Z (HIGH)**, Thu Existing Home Sales, Fri PPI.
+  YOLO is 4/4 slots at ~21% notional, so it cannot rotate into pre-CPI risk; any
+  −1R-or-worse close inside the 13:30Z window is event gap (settled #7/#11), not
+  an exit defect.
+- **n=60 is the next honest checkpoint** (CI tightens to ±0.29R). Until then the
+  only quotable YOLO number is avgR +0.026R at n=47 with its CI, never the
+  −0.84% dollars alone.
+- **The open XLE MR position** (entry 63.11, stop 59.11, target 69.62, last 61.72)
+  is the MR sleeve's 7th close whenever it comes; its exit reason and payoff
+  matter more than its R, because a 0.46:1 payoff needs 68% wins to work.
+- **If the LLM's discretionary exits keep netting zero** (26 closes at −1.24R so
+  far), the next structural question is whether they add anything over holding to
+  the bracket, and that question needs the same bar-path treatment, not a vote.

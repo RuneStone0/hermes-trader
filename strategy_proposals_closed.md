@@ -523,6 +523,73 @@ unresolvable by construction. No regime gate is filed.
 regime the current sample does not contain, showing that bucket ≥0.25R worse than
 the best with a CI excluding zero.
 
+## 25. "YOLO's flat capture is an exit-timing problem: publish exit_reason, MFE-at-exit and post-exit run-on, then trail the exit (three pending items, 2026-11-03 / 11-05 / 11-06)"
+**VERDICT: MEASURED 2026-11-09, THE FALSIFIER FIRED. The exit-timing family is
+CLOSED. Do not re-propose an exit change on YOLO without overturning these two
+measurements.** Full evidence: `reports/exit_attribution_2026-11-09.md`; probes
+`probes/post_exit_runon.py` and `probes/replay_trail_full.py`.
+
+1. **Exit-reason split (47 closes, live).** target 8 → **+16.66R**; stop 8 →
+   **−8.27R**; market (LLM close) 26 → **−1.24R**; NULL (pre-telemetry broker
+   exits) 5 → **−5.90R**. The book's entire +1.24R is eight target hits. The 26
+   discretionary closes, 55% of all closes, net −1.24R for the lot (avg −0.048R):
+   the LLM's exit judgement is worth zero in aggregate. There is **no `time`
+   exit in this book at all**: the reasons are stop / target / market / NULL.
+2. **Post-exit run-on (first 5 five-min RAW bars after the fill, in R).** All 47
+   measurable: median **+0.09R**. Market exits n=26 median **+0.04R**; target
+   exits n=8 +0.12R; stop exits n=8 +0.13R; **MFE≥1R cohort n=14 median +0.07R**
+   with only 1 of 14 reaching +0.5R. The proposal's own falsifier was "time exits
+   under 40% AND the 1R cohort's median run-on below 0.5R" → both conditions hold,
+   by a factor of seven to fourteen. After these exits print, the tape offers
+   nothing: the exits are not early, they are on time.
+3. **Trailing-stop replay (full position, 0.25R–1.5R, same 47 entries, bar path,
+   no intra-bar look-ahead).** ΣR: base +1.34, 0.25R +3.26, 0.35R +1.79, 0.50R
+   −0.99, 0.75R −3.77, 1.00R +0.61, 1.50R +1.80. Best cell = **+0.041R/trade**
+   against a 95% CI half-width of **±0.29R** on the per-trade delta: the effect is
+   one seventh of its own noise. The drop-top-2 test passes (+4.81R on the
+   remaining 45) but the pre-registered criterion was the CI, and it fails. The
+   response curve also flips sign twice across adjacent fractions (+1.92, +0.45,
+   −2.33, −5.12, −0.74, +0.45), which is the signature of a threshold
+   coincidence, not a mechanism.
+
+**Falsifier (for anyone re-opening this):** show a cohort where median post-exit
+run-on is ≥0.5R on the trades that reached 1R, or a trail fraction that beats the
+current exit by more than the per-trade delta CI at n≥60. An argument from the
+capture ratio alone is not evidence: capture 0.037 is exactly what a book with a
+0.31R median excursion and a 1.0R stop SHOULD produce.
+
+## 26. "DAILY: shorten the ORB target from rr_multiple 1.5 to 1.0 (median MFE 0.293R, capture −0.399, 0/7 trades reaching 1R)"
+**VERDICT: RETIRED 2026-11-09, MISATTRIBUTED. The statistics are the DAILY
+ACCOUNT's, not the DAILY ORB's, and the knob belongs to the ORB.** Do not
+re-propose "tune DAILY rr_multiple" on account-level numbers.
+
+Recomputed from the live DB: the **daily account** has 7 closed trades and they
+reproduce the quoted figures exactly (n=7, avgR −0.099, medMFE 0.293, capture
+−0.399, 0/7 ≥1R). But those 7 rows are **1 daily_orb trade + 6 mr_rsi2 trades**:
+
+| sleeve | n | ΣR | avgR | med MFE | capture |
+|---|---|---|---|---|---|
+| daily ACCOUNT | 7 | −0.70 | −0.099 | 0.293 | −0.399 |
+| daily_orb only | **1** | +0.21 | +0.212 | 0.356 | +0.596 |
+| mr_rsi2 only | 6 | −0.91 | −0.151 | 0.228 | −0.654 |
+
+`DAILY['rr_multiple']` is read by the ORB only; `mr_run.py` uses `MR` geometry
+(2.5 ATR stop, 4 ATR outer cap, close-above-SMA5 rule exit). So the proposal
+would have retuned the ORB's target on a book that is 86% a different strategy
+with a 6.5x wider median stop. The ORB itself is n=1 (+0.21R, MFE 0.356R, stop
+0.385 ATR) and carries no information about its target distance.
+
+**Consequence for the daily account:** the sleeve worth reviewing there is
+mr_rsi2, and its geometry is the fragile one the skill warns about: avg win
++0.26R against avg loss −0.57R is a 0.46:1 payoff that needs a **68.2%** win rate
+to break even, and live it is 50% on n=6. That is not a defect yet (n=6, CI
+±0.385R), but any future "fix the MR exits" proposal must raise the payoff
+geometry, not the win rate.
+
+**Falsifier:** if the account-level book ever exceeds 15 ORB-only closes and the
+ORB-only median MFE is still under 0.7R at the current 1.5 setting, the target
+question is genuinely open, for the ORB, on ORB rows.
+
 ---
 
 Settled findings are also mirrored at
