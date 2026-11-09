@@ -804,9 +804,9 @@ Read this honestly. YOLO was **+1.00R on 14 closes and still lost $2.70**, becau
 14 R is priced at whatever the model sized each trade to (1R ranged $3.18 to $52.24
 on this book). All three accounts "beat" SPY by ~2.3 to 2.7 points this week by being
 mostly cash in a −2.69% tape; the same construction loses to SPY by the same
-margin in an up week. That is a beta artifact, not alpha, and since inception the
-whole system is roughly **+3.2 points ahead of buy-and-hold on 20-25% notional**,
-which is the same artifact over a longer window.
+margin in an up week. That is a beta artifact, not alpha. Since inception the three accounts average
+**-0.33% against SPY's -4.00%** (+3.7 points) while carrying roughly 7% of total
+capital at risk: the same artifact one size smaller, not skill.
 
 YOLO's week: 14 closes, **3 targets (+$74.71 combined)**, 2 stops, and 9
 discretionary closes of which 6 were small losses and 3 small wins. The two worst
