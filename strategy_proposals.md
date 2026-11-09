@@ -885,8 +885,8 @@ mean two things again.
 
 - **The ATR stop floor (min_stop_atr 1.0) has not fired once**, and no entry since
   it shipped has been rejected by it: the sub-1.0-ATR cohort is still the same 7
-  trades, all opened before 2026-10-08, and the smallest distance among trades
-  opened since is 1.18 ATR. The guard is a floor that the model's own discipline
+  trades, all opened by 2026-10-09 (last: AMZN 0.98), and the smallest stop
+  among the 14 closes of this week is 1.18 (MSFT). The guard is a floor that the model's own discipline
   is already clearing, which is the outcome we wanted; it stays as insurance.
 - **Equal-risk sizing** (filed 2026-11-02) remains NOT deployed: it raises the
   smallest trades' risk from 0.03% to 0.5% and open risk from 0.61% to 2.0%,
