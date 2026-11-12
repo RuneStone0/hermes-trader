@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-LABELS = {"daily": "Daily ORB", "weekly": "Weekly pullback", "yolo": "YOLO"}
+LABELS = {"daily": "Daily ORB", "weekly": "Portfolio pullback", "yolo": "YOLO"}
 
 SCHEDULES = {
     "daily":  {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 300},
-    "weekly": {"kind": "times", "times": ["14:45"]},
+    # The weekly ACCOUNT (config/keys name unchanged) now runs the multi-symbol
+    # portfolio sleeve once daily near the close.
+    "weekly": {"kind": "times", "times": ["20:45"]},
     "yolo":   {"kind": "window", "start": "13:00", "end": "21:00", "interval_s": 1800},
 }
 

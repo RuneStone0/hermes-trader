@@ -29,8 +29,15 @@ START = time.time()
 JOBS = [
     {"name": "daily", "type": "window", "start": "13:00", "end": "21:00",
      "interval_s": 300, "cmd": [sys.executable, "daily_run.py"], "timeout": 180},
-    {"name": "weekly", "type": "times", "times": ["14:45"],
-     "cmd": [sys.executable, "weekly_run.py"], "timeout": 180},
+    # The single-symbol weekly sleeve is REPLACED by the PORTFOLIO sleeve.
+    # weekly_run.py demanded price within 1x ATR of the 100d SMA and then passed
+    # an LLM veto; over its whole life that produced 10 evaluations and ZERO
+    # trades. The lab measured the edge on BREADTH (14 ETFs): +38.13R OOS over
+    # 166 trades, vs +5.83R over 13 on SPY alone — a one-symbol sleeve cannot
+    # capture it. Runs near the close (20:45 UTC = 15:45 ET) because the rule is
+    # close-based.
+    {"name": "portfolio", "type": "times", "times": ["20:45"],
+     "cmd": [sys.executable, "portfolio_run.py"], "timeout": 240},
     {"name": "reconcile", "type": "interval", "interval_s": 600,
      "cmd": [sys.executable, "reconcile.py"], "timeout": 180},
     {"name": "selfheal", "type": "interval", "interval_s": 600,
