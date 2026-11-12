@@ -53,6 +53,22 @@ JOBS = [
              "import econ; r=econ.refresh(force=True); "
              "print(r['source'], len(r['events']), 'events'); print(econ.brief()[:400])"],
      "timeout": 120},
+    # --- Strategy lab: recurring, one job per trading profile -----------------
+    # Searches for a rule with a REAL edge on 8 years of daily bars, validated on
+    # two disjoint hold-out halves. Unlike self_improve (which asks an LLM what it
+    # thinks of ~60 trades), this tests rules against actual prices. Each run
+    # explores NEW parameter combinations via the ledger, so coverage accumulates
+    # instead of looping. Writes champion_<profile>.json only when a config clears
+    # the gate. Staggered so the three never overlap.
+    {"name": "lab_weekly", "type": "times", "times": ["22:05"],
+     "cmd": [sys.executable, "strategy_lab.py", "--profile", "weekly",
+             "--iterations", "40"], "timeout": 600},
+    {"name": "lab_daily", "type": "times", "times": ["22:25"],
+     "cmd": [sys.executable, "strategy_lab.py", "--profile", "daily",
+             "--iterations", "40"], "timeout": 600},
+    {"name": "lab_yolo", "type": "times", "times": ["22:45"],
+     "cmd": [sys.executable, "strategy_lab.py", "--profile", "yolo",
+             "--iterations", "40"], "timeout": 600},
 ]
 
 
