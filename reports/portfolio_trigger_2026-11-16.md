@@ -68,8 +68,13 @@ a strategy that holds for weeks. That trade needs its own evidence, not two runs
 
 ## 3. Action taken
 
-`portfolio_run.py` now prints the nearest misses whenever a scan finds nothing
-(actual output recorded below after the deploy).
+`portfolio_run.py` (v1.6.8) now prints the nearest misses whenever a scan finds
+nothing. Actual output from the deployed container, with XLE removed from the
+universe to force the empty branch (2026-11-16, real bars):
+
+```
+[portfolio] no setups across 13 symbols; closest: XLB +0.48 ATR outside, TLT +0.57 ATR outside, IWM +0.64 ATR outside
+```
 
 Diagnostic only (`_band_gap_atr`), pinned by `tests/test_portfolio_sleeve.py` so it
 cannot influence entries: the entry decision still comes from `_signal` alone. A
