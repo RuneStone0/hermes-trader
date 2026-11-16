@@ -20,7 +20,7 @@ path) over **948 daily bars x 14 universe symbols**, 2022-11-18 .. 2026-11-13:
 | symbol-days evaluated | 13,272 |
 | signals | 1,828 (**13.8%** of symbol-days) |
 | trading days with >= 1 setup | **809 of 948 = 85.3%** |
-| signals per signal-day | 1.85 average |
+| signals per signal-day | 2.26 (1.93 per trading day) |
 | per-symbol signal rate | 10.3% (SLV) to 17.9% (XLE, XLB) |
 
 The last 30 signal-days run from 2026-09-21 to 2026-11-13, i.e. the trigger kept
