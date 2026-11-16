@@ -105,6 +105,30 @@ def _signal(bars) -> dict | None:
             "sma": sma_v, "atr": atr_v, "dist_atr": (last - sma_v) / atr_v}
 
 
+def _band_gap_atr(bars) -> float | None:
+    """How far OUTSIDE the entry band this symbol sits, in ATR units (0 = inside).
+
+    Diagnostic only - it never enters the entry decision. A bare "no setups in 14
+    symbols" line cannot distinguish "the rule is alive and nothing qualifies" from
+    "the scan is blind", and that ambiguity is exactly what gets a live sleeve
+    declared dead (or kept alive) on no evidence. Printing the nearest misses makes
+    every empty run reproducible: a setup sitting 0.01 ATR outside the band is a
+    normal quiet day, one sitting 4 ATR outside for ten runs is a regime statement.
+    """
+    closes = [b["c"] for b in bars]
+    s = sma(closes, PARAMS["sma_n"])
+    a = atr(bars, 14)
+    if len(closes) < PARAMS["sma_n"] + 2 or s[-1] is None or a[-1] is None or a[-1] <= 0:
+        return None
+    last, sma_v, atr_v = closes[-1], s[-1], a[-1]
+    hi = sma_v + PARAMS["band"] * atr_v
+    if last <= sma_v:              # needs to RISE into the band
+        return (sma_v - last) / atr_v
+    if last > hi:                  # needs to FALL into the band
+        return (last - hi) / atr_v
+    return 0.0                     # inside the band: nothing left to gap
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -160,6 +184,7 @@ def main() -> None:
 
     # 2. scan the universe for the rule
     cands = []
+    near = []           # (gap_atr, sym) for the nearest misses - diagnostics only
     for sym in UNIVERSE:
         if sym in positions:
             continue
@@ -174,12 +199,18 @@ def main() -> None:
         if sig:
             sig["symbol"] = sym
             cands.append(sig)
+        else:
+            gap = _band_gap_atr(bars)
+            if gap is not None:
+                near.append((gap, sym))
 
     if not cands:
+        near.sort()
+        closest = ", ".join(f"{s} {g:+.2f} ATR outside" for g, s in near[:3]) or "no data"
         db.log_event(ACCOUNT, STRATEGY, "skip",
                      f"no setups in {len(UNIVERSE)} symbols "
                      f"(close in [SMA50, SMA50+1.0 ATR])", dedup=True)
-        print(f"[portfolio] no setups across {len(UNIVERSE)} symbols")
+        print(f"[portfolio] no setups across {len(UNIVERSE)} symbols; closest: {closest}")
         return
 
     # tightest-to-the-SMA first: that is the deepest pullback in an uptrend

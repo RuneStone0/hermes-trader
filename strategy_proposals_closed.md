@@ -590,6 +590,57 @@ geometry, not the win rate.
 ORB-only median MFE is still under 0.7R at the current 1.5 setting, the target
 question is genuinely open, for the ORB, on ORB rows.
 
+## 27. "The portfolio sleeve is dead on arrival: two runs, zero trades (the weekly_pullback failure mode repeating)"
+
+**VERDICT: MEASURED 2026-11-16, FALSE. The trigger is live; both runs were normal
+no-setup days.** Do not declare this sleeve dead on a run of empty scans, and do
+not widen its band on that basis. Evidence: `reports/portfolio_trigger_2026-11-16.md`.
+
+Replaying the sleeve's own `_signal` over 948 daily bars x 14 universe symbols
+(2022-11-18 .. 2026-11-13): **1,828 signals over 13,272 symbol-days (13.8%)**, and
+**809 of 948 trading days (85.3%) produced at least one setup**. Per-symbol rates
+run 10.3% (SLV) to 17.9% (XLE, XLB). The two empty live runs were days when nothing
+closed inside the band: on 2026-11-12 no symbol qualified at the close either, and
+on 2026-11-13 XLE closed **2 cents above its SMA50 (64.93 vs 64.9108, +0.01 ATR)**,
+which the close-based rule counts and the 15:45 scan could not see.
+
+This is not settled #15. That verdict covered a sleeve whose trigger almost never
+coincided with a tradeable price and which then applied an LLM veto (10
+evaluations, 0 trades, lifetime). This sleeve has no veto and an 85%-of-days
+trigger. Its money problem, if any, is the entry edge, not the signal's existence.
+
+**Falsifier:** the sleeve is genuinely dead if **10 consecutive scheduled runs**
+report zero setups while a close-based replay of those same days finds >= 1
+setup. That is a broken scan path (stale bars, wrong universe, bad clock gate),
+not a rare rule.
+
+## 28. "The portfolio sleeve trades a different rule than the lab measured, because it evaluates a close-based signal 15 minutes early"
+
+**VERDICT: MEASURED 2026-11-16, REAL BUT BOUNDED. No timing change deployed.**
+Evidence: `reports/portfolio_trigger_2026-11-16.md`.
+
+The champion was measured on the 16:00 ET close with fills at the NEXT open. The
+live job runs at 20:45 UTC (15:45 ET) and treats the in-progress daily bar as the
+close, so both the signal and the fill are 15 minutes early. One live setup was
+lost to it (XLE, 2026-11-13, dist +0.01 ATR).
+
+Size of the divergence, measured on every 5-minute day the free IEX tier serves
+(14 symbols, 81 symbol-days): **0 signal flips**. The final-15-minute move is
+median **0.019 ATR**, p90 0.095, max 0.230 (n=39 symbol-days), so only a signal
+sitting within about 0.02 ATR of a band edge can flip. That is small enough that
+it cannot be shown to change the measured edge, and 81 symbol-days cannot bound
+the flip rate tightly either. Reporting the number is the point: the gap is now
+measured rather than assumed harmless.
+
+Why no change: moving the scan after the close (21:05 UTC) would match the lab's
+signal convention but swap the fill convention from "same-day 15:45 market" to
+"next open", adding an overnight gap to every entry on a multi-week strategy. That
+is a different system needing its own fill-convention study, not a bug fix.
+
+**Falsifier:** if a longer 5-minute history shows **>= 5% of signals flipping**
+between 15:45 and the close, or a live run misses a setup whose `dist_atr` was
+**> 0.05 ATR** at scan time, the after-close variant gets its own study.
+
 ---
 
 Settled findings are also mirrored at
