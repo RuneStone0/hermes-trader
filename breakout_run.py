@@ -301,6 +301,12 @@ def main() -> None:
                          f"{sym}: bracket geometry invalid at the live price")
             continue
         budget = min(equity * WEIGHT, equity * MAX_GROSS - gross)
+        # Never plan an order the account cannot pay for. The daily ACCOUNT also
+        # runs the ORB (up to ~90% notional on SPY) and the MR sleeve, so this
+        # sleeve's own 50% cap says nothing about available CASH. A rejected
+        # order is dashboard noise, and on an overnight hold it is a margin
+        # position nobody chose.
+        budget = min(budget, float(acct.get("cash") or 0.0) * 0.95)
         shares = int(budget // px)
         if shares < 1:
             if px <= equity * MIN_SHARE_FRACTION:
