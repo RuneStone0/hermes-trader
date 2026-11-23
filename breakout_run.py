@@ -1,4 +1,4 @@
-"""Daily 20-day-high breakout sleeve — the lab's `breakout` champion, traded as measured.
+"""Daily 20-day-high breakout sleeve - the lab's `breakout` champion, traded as measured.
 
 Why this sleeve exists
 ----------------------
@@ -18,7 +18,7 @@ bars reproduces it:
       2023-24 +0.367, 2020H2-22 +0.109 (all positive)
 
 The lab's grid (tested.jsonl) shows the same plateau from a different code path:
-n=20 with stop 1.5/2.0/3.0 and hold 10/15/20, target 0 or 4 ATR — B-window
+n=20 with stop 1.5/2.0/3.0 and hold 10/15/20, target 0 or 4 ATR - B-window
 expectancy +0.14 to +0.28R, PF 1.5-1.8. A single lucky config does not look
 like that; a real effect does.
 
@@ -103,7 +103,7 @@ def _completed(bars: list[dict], today: str) -> list[dict]:
 
     The session date is the bar's UTC date, NOT its New-York date: Alpaca stamps a
     daily bar at 00:00Z (or 04:00Z) of the trading day, which is the previous
-    evening in ET — converting to ET would shift every bar back one day and make
+    evening in ET - converting to ET would shift every bar back one day and make
     "today" invisible. Verified against the live feed: 1Day bars for 1590 sessions
     come back with t == "<session date>T00:00:00Z".
     """
@@ -193,7 +193,7 @@ def main() -> None:
     hm = market.et_hm()
     if not args.assume_open and not (ENTRY_WINDOW[0] <= hm < ENTRY_WINDOW[1]):
         # Only the first minutes after the open. A frozen UTC time would be an
-        # hour late through DST — the ET clock is the correct gate.
+        # hour late through DST - the ET clock is the correct gate.
         db.log_event(ACCOUNT, STRATEGY, "skip",
                      f"outside the entry window {ENTRY_WINDOW[0]}-{ENTRY_WINDOW[1]} ET",
                      dedup=True)
@@ -230,7 +230,7 @@ def main() -> None:
     fomc, fomc_why = guards.fomc_block_new_overnight()
     if fomc:
         db.log_event(ACCOUNT, STRATEGY, "blocked",
-                     f"Standing down: {fomc_why} — a rate decision can gap "
+                     f"Standing down: {fomc_why} - a rate decision can gap "
                      f"straight through the stop")
         st.update(decided="blocked", note=fomc_why)
         _save_state(today, st)
@@ -286,7 +286,7 @@ def main() -> None:
             print(f"[breakout] {sym}: latest_trade error {e}")
             continue
         if not lt or not lt.get("price"):
-            print(f"[breakout] {sym}: no live price — skipping (a bracket needs one)")
+            print(f"[breakout] {sym}: no live price - skipping (a bracket needs one)")
             continue
         px = float(lt["price"])
         a = sig["atr"]
@@ -296,7 +296,7 @@ def main() -> None:
         # side of it is a 422, and a leg within a cent is a 422 too.
         if stop <= 0 or stop >= px * 0.997 or target <= px * 1.003:
             print(f"[breakout] {sym}: geometry rejected (px {px:.2f} stop {stop:.2f} "
-                  f"target {target:.2f}) — not tradable")
+                  f"target {target:.2f}) - not tradable")
             db.log_event(ACCOUNT, STRATEGY, "no_go",
                          f"{sym}: bracket geometry invalid at the live price")
             continue
@@ -304,10 +304,10 @@ def main() -> None:
         shares = int(budget // px)
         if shares < 1:
             if px <= equity * MIN_SHARE_FRACTION:
-                print(f"[breakout] {sym}: 1 share (${px:.0f}) exceeds budget ${budget:.0f} — skipping")
+                print(f"[breakout] {sym}: 1 share (${px:.0f}) exceeds budget ${budget:.0f} - skipping")
             continue
         if shares * px > equity * MIN_SHARE_FRACTION:
-            print(f"[breakout] {sym}: would be {shares * px / equity:.0%} of equity in one name — skipping")
+            print(f"[breakout] {sym}: would be {shares * px / equity:.0%} of equity in one name - skipping")
             continue
         if size_mult < 1.0:
             shares = max(1, int(shares * size_mult))
@@ -317,7 +317,7 @@ def main() -> None:
         try:
             # Today's OPEN, from 5-minute bars: a 1Day bar for the current session
             # may not exist yet mid-session, and a missing drift must read as
-            # "unknown" (None), not as 0.00 — a zero would look like a perfect
+            # "unknown" (None), not as 0.00 - a zero would look like a perfect
             # fill and hide the one fidelity gap this sleeve has.
             day_bars = client.bars(sym, timeframe="5Min", limit=10,
                                    start=today).get("bars") or []

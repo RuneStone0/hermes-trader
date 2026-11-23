@@ -641,6 +641,67 @@ is a different system needing its own fill-convention study, not a bug fix.
 between 15:45 and the close, or a live run misses a setup whose `dist_atr` was
 **> 0.05 ATR** at scan time, the after-close variant gets its own study.
 
+## 29. "The portfolio sleeve's two -1R stops prove it should not buy pullbacks while SPY is below its 200d"
+
+**VERDICT: MEASURED 2026-11-23, REFUTED AND MEASURABLY BACKWARDS. Do not
+re-propose a market-trend gate for the portfolio sleeve without overturning these
+numbers.** Both of the sleeve's first two live closes were -1R stops (XLB -1.042R,
+XLF -1.001R) entered with SPY 7.2% below its 20d, VIX 26, breadth 9%. The story
+writes itself and it is wrong.
+
+Replaying `portfolio_run._signal` (the live code path) over 14 ETFs x 1,590 daily
+bars, 2020-07-27 to 2026-11-20, next-open fill, 1bp adverse slippage, stop 1.5
+ATR / target 2.5 ATR / 30 sessions: **720 trades**.
+
+| regime at signal close | n | sumR | avgR | CI95 | win% |
+|---|---|---|---|---|---|
+| SPY ABOVE its 200d | 535 | +36.21 | +0.068 | [-0.043, +0.178] | 43.2 |
+| SPY BELOW its 200d | 117 | +25.01 | **+0.214** | [-0.050, +0.478] | 45.3 |
+
+Difference (above minus below): **-0.146R**, Welch t=-1.00, CI [-0.432, +0.140].
+SPY was below its 200d on 276 of 1,391 sessions (19.8%) and those sessions produced
+34% of the sleeve's measured R. A "only trade above the 200d" gate would cut 26% of
+the trades and **+25R of the +74R measured**.
+
+Why the intuition fails: the entry already requires the SYMBOL above its own 50d
+SMA, which is the trend filter that matters at the level the trade is taken.
+"SPY below its 200d" describes a tape where sector rotation (healthcare, staples,
+bonds) is where pullbacks pay, not a tape where pullbacks fail.
+
+Also settled here: two consecutive -1R stops at a 43% win rate is a ~33% coin
+flip, so the live 0/2 is unremarkable rather than diagnostic.
+
+**Falsifier:** a re-run on a longer window that puts the below-200d bucket at
+avgR < 0 with a CI excluding zero would reopen it. One index gate remains
+untested and is NOT covered by this verdict: a per-symbol 200d filter (this test
+gated on SPY only).
+
+## 30. "champion_weekly.json changed (band 1.5 / hold 20), so the live sleeve is stale and should switch"
+
+**VERDICT: MEASURED 2026-11-23, NO SWITCH. The deployed config is the better one
+on the only ranking the lab trusts (min(A,B)).** The lab re-ranked on 2026-11-18
+and its champion file now differs from the deployed parameters. Both configs pass
+the gate:
+
+| config | IS sumR (n) | A sumR (n) | B sumR (n) | B expR | min(A,B) |
+|---|---|---|---|---|---|
+| **deployed** band 1.0, hold 30 | +55.31 (494) | +28.24 (89) | **+9.89 (77)** | +0.1285 | **+9.89** |
+| lab champion band 1.5, hold 20 | +64.29 (587) | +40.70 (111) | +5.39 (92) | +0.0586 | +5.39 |
+
+The champion's edge is in-sample: +9R more IS, -4.5R less on the 2026 hold-out.
+Ranking by pooled OOS would pick whichever config caught one regime hardest, which
+the lab's own rule forbids.
+
+Recorded caveat: my independent replay of the deployed rule on free-tier bars gives
+2026 **+0.004R over 104 trades**, versus the lab's +0.1285R over 77. Fill convention
+(lab measures the stop from the fill, the live rule from the signal close), window
+start (2020-07 vs 2018-11) and slot capping all differ. The honest range for the
+sleeve's 2026 expectancy is [0.00, +0.13]R/trade with a CI spanning zero. That
+argues for keeping the sleeve's size, not for changing its config.
+
+**Falsifier:** if a like-for-like replay (same window, same fill convention) puts
+the deployed config below the champion on BOTH halves, the switch is real.
+
 ---
 
 Settled findings are also mirrored at

@@ -35,7 +35,7 @@ _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback
 # An account can host more than one sleeve: the daily ACCOUNT runs the SPY
 # opening-range breakout, the mean-reversion sleeve AND the daily-bar breakout
 # (separate strategies, one account, separate risk budgets). The account card's
-# "last decision" line must consider all of them — but NOT selfheal, which logs
+# "last decision" line must consider all of them, but NOT selfheal, which logs
 # against the account too and is repair work rather than a trade decision.
 _ACCOUNT_STRATEGIES = {
     "daily": ("daily_orb", "mr_rsi2", "daily_breakout"),
