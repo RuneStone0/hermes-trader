@@ -51,6 +51,16 @@ JOBS = [
     # 15-min cadence keeps the rule exit responsive.
     {"name": "mr", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 900,
      "market_gate": True, "cmd": [sys.executable, "mr_run.py"], "timeout": 240},
+    # Daily-bar 20-day-high breakout on the daily account (breakout_run.py).
+    # The lab's `breakout` family is positive in EVERY measured window (IS, both
+    # hold-outs) across a whole parameter plateau; the live ORB it sits beside
+    # cannot be validated on the free tier and has produced 2 trades in 11 weeks.
+    # Signal = last completed close > 20-day high, fill at the next open (the
+    # lab's own convention), 1.5 ATR stop / 4.0 ATR target / 15-session hold.
+    # The script gates itself to the first minutes after the ET open, so a 5-min
+    # tick is right: it fires once and journals "already decided" after that.
+    {"name": "breakout", "type": "window", "start": "13:00", "end": "21:00", "interval_s": 300,
+     "market_gate": True, "cmd": [sys.executable, "breakout_run.py"], "timeout": 240},
     # Warm the economic-calendar cache BEFORE the session so the first decision
     # of the day never pays a network round-trip (and so a feed outage shows up
     # in the logs while the market is still closed). Twice a day keeps the 7-day

@@ -30,19 +30,20 @@ import schedule
 ACCOUNTS = ("daily", "weekly", "yolo")
 _STRATEGY = {"daily": "daily_orb", "weekly": "weekly_pullback", "yolo": "yolo"}
 _STRATEGY_LABEL = {"daily_orb": "Daily ORB", "weekly_pullback": "Weekly pullback",
-                   "mr_rsi2": "Mean reversion",
+                   "mr_rsi2": "Mean reversion", "daily_breakout": "Breakout",
                    "yolo": "YOLO", "selfheal": "Self-heal"}
 # An account can host more than one sleeve: the daily ACCOUNT runs the SPY
-# opening-range breakout AND the mean-reversion sleeve (separate strategies, one
-# account, separate risk budgets). The account card's "last decision" line must
-# consider both — but NOT selfheal, which logs against the account too and is
-# repair work rather than a trade decision.
+# opening-range breakout, the mean-reversion sleeve AND the daily-bar breakout
+# (separate strategies, one account, separate risk budgets). The account card's
+# "last decision" line must consider all of them — but NOT selfheal, which logs
+# against the account too and is repair work rather than a trade decision.
 _ACCOUNT_STRATEGIES = {
-    "daily": ("daily_orb", "mr_rsi2"),
+    "daily": ("daily_orb", "mr_rsi2", "daily_breakout"),
     "weekly": ("weekly_pullback",),
     "yolo": ("yolo",),
 }
-_ACCOUNT_LABEL = {"daily": "Daily ORB + Mean reversion", "weekly": "Weekly pullback",
+_ACCOUNT_LABEL = {"daily": "Daily ORB + Mean reversion + Breakout",
+                  "weekly": "Weekly pullback",
                   "yolo": "YOLO"}
 _DECISION_COLORS = {"go": "#3fb950", "exit": "#58a6ff", "no_go": "#d29922",
                     "skip": "#8b949e", "error": "#f85149",
