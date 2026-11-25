@@ -15,9 +15,10 @@ Rules (each individually toggled in config.SELFHEAL):
                 legs, prices copied VERBATIM from the trade's stop_price /
                 target_price. If no stop_price is on record -> log error and
                 leave it for the Hermes watchdog (never invent a level).
-                Skipped while the position already carries a live closing
-                *market* order (the exit path's own close is in flight, so the
-                shares are committed and a new stop would be rejected 403).
+                Skipped while the position's shares are held by a live closing
+                order of any kind (the exit path's own market close in flight, or
+                a bracket's target limit filling): the shares are committed and a
+                new stop would be rejected 403.
   R3 debris   — open protective orders (stops/limits) on symbols with NO
                 position and no pending entry order -> cancel (stale bracket
                 siblings that could misfire on a future move).
@@ -51,11 +52,16 @@ OPEN_STATUSES = {
 # An order can only PROTECT a position if a fill would close it (stop/stop_limit
 # on the opposite side). A bare take-profit limit does NOT protect.
 PROTECTIVE_TYPES = {"stop", "stop_limit"}
-# An order that can only CLOSE the position (the bots' exit path releases the
-# protective legs and then submits an unconditional market close). The broker
-# HOLDS the shares against that order until it fills, so while it is live the
-# position is not "naked" — it is being exited.
-CLOSING_TYPES = {"market"}
+# An order that can only CLOSE the position: the bots' exit path releases the
+# protective legs and then submits an unconditional market close, and a bracket's
+# take-profit LIMIT leg closes too (it is not protection, but it does hold the
+# shares). The broker HOLDS every share against such an order until it fills or is
+# cancelled, so while one is live the position is not "naked": it is being
+# exited. (2026-11-25: TLT's target limit began filling, the OCO cancelled the
+# stop leg and the position dropped to the 4 unfilled shares; restricting this
+# set to {"market"} made R2 try to attach a stop against shares the limit held ->
+# HTTP 403 40310000 'insufficient qty available' on every tick.)
+CLOSING_TYPES = {"market", "limit", "stop", "stop_limit"}
 # An order that could OPEN a position if filled (pending entry order).
 ENTRY_TYPES = {"market", "limit"}
 # Common ETFs — for the db asset_class label of adopted rows (same set as
@@ -85,6 +91,18 @@ def _has_protection(open_orders: list[dict], side: str) -> bool:
     want = "sell" if side == "long" else "buy"
     return any(o.get("side") == want and o.get("type") in PROTECTIVE_TYPES
                for o in open_orders)
+
+
+def _closing_orders(open_orders: list[dict], side: str) -> list[dict]:
+    """Live orders on the opposite side that own the position's shares.
+
+    While one of these is working the broker reports `available: 0` for the
+    symbol, so the position's qty is a MID-FILL value and no new order for those
+    shares can be booked. Same guard class for R1 (qty) and R2 (protection).
+    """
+    want = _opposite_side(side)
+    return [o for o in open_orders
+            if o.get("side") == want and o.get("type") in CLOSING_TYPES]
 
 
 def selfheal_account(account: str, dry_run: bool = False) -> None:
@@ -137,6 +155,26 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
                 )
                 _log(account, "warn", f"adopted {sym} from broker (missing DB row)", detail)
             elif abs(qty) != float(t["qty"]):
+                # A broker position qty is only the TRADE's size when nothing is
+                # closing it. Once an opposite-side order starts filling (a
+                # bracket's target limit, an exit in flight) the broker reports
+                # just the unfilled remainder, and syncing that onto the row
+                # rewrites the trade's size and every later P/L figure derived
+                # from it (2026-11-25: weekly TLT target filled 11 of 15, R1
+                # wrote qty 15 -> 4, and reconcile then closed the trade as a
+                # 4-share win instead of a 15-share one). Leave the row alone and
+                # say so; the row's size is right, the position is mid-exit.
+                closing = _closing_orders(by_sym.get(sym, []), side)
+                if closing:
+                    o = closing[0]
+                    _log(account, "skip",
+                         f"{sym}: qty left as-is, its exit is filling",
+                         detail=(f"{float(t['qty']):g} on record, {abs(qty):g} "
+                                 f"unfilled and held by live {o.get('type')} "
+                                 f"{o.get('side')} order "
+                                 f"{str(o.get('id', ''))[:8]}"),
+                         dedup=True)
+                    continue
                 if not dry_run:
                     db.update_trade(t["id"], qty=abs(qty))
                 _log(account, "fix", f"synced {sym} qty {float(t['qty']):g} -> {abs(qty):g}")
@@ -151,23 +189,23 @@ def selfheal_account(account: str, dry_run: bool = False) -> None:
             if _has_protection(by_sym.get(sym, []), side):
                 continue  # protected (bracket stop leg live, incl. 'held')
             # A live order that only CLOSES the position (the exit path released
-            # the legs a second earlier and its market close is still working)
-            # holds every share: re-attaching a stop now is rejected by the
-            # broker (403 40310000 'insufficient qty available' — daily XLF x35
-            # and yolo XLV x1, 2026-09-21, ~30s after their own close orders) and
-            # would fight the intended exit. Same reasoning as R3's pending-entry
-            # guard. If that close dies unfilled, the next tick sees no live
-            # order and re-attaches, so protection is never dropped for long.
-            closing = [o for o in by_sym.get(sym, [])
-                       if o.get("side") == _opposite_side(side)
-                       and o.get("type") in CLOSING_TYPES]
+            # the legs a second earlier and its market close is still working,
+            # or a bracket's target limit is filling) holds every share:
+            # re-attaching a stop now is rejected by the broker (403 40310000
+            # 'insufficient qty available' — daily XLF x35 and yolo XLV x1,
+            # 2026-09-21, ~30s after their own close orders; weekly TLT x4,
+            # 2026-11-25, on a partially filled target limit) and would fight the
+            # intended exit. Same reasoning as R3's pending-entry guard. If that
+            # exit dies unfilled the next tick sees no live order and
+            # re-attaches, so protection is never dropped for long.
+            closing = _closing_orders(by_sym.get(sym, []), side)
             if closing:
                 o = closing[0]
                 _log(account, "skip",
                      f"{sym}: protection left as-is — its exit is already working",
                      detail=(f"{side} x{qty:g}: live {o.get('type')} "
                              f"{o.get('side')} order {str(o.get('id', ''))[:8]} "
-                             f"holds all the shares"),
+                             f"holds the remaining shares"),
                      dedup=True)
                 continue
             t = trades.get(sym)

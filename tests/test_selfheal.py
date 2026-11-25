@@ -38,6 +38,7 @@ ORDERS: dict = {}
 TRADES: dict = {}
 EVENTS: list = []
 SUBMITTED: list = []
+UPDATES: list = []
 
 
 class FakeClient:
@@ -74,6 +75,7 @@ def _install(account: str, positions: list, orders: list, trades: list) -> None:
     TRADES.clear()
     EVENTS.clear()
     SUBMITTED.clear()
+    UPDATES.clear()
     POSITIONS[account] = positions
     ORDERS[account] = orders
     TRADES[account] = trades
@@ -86,7 +88,8 @@ def _install(account: str, positions: list, orders: list, trades: list) -> None:
     db.open_trades = lambda acct=None: TRADES.get(acct, [])
     db.insert_trade = lambda **kw: (TRADES.setdefault(kw.get("account"), [])
                                     .append({"id": 99, **kw}) or 99)
-    db.update_trade = lambda trade_id, **kw: None
+    db.update_trade = lambda trade_id, **kw: (UPDATES.append({"id": trade_id, **kw})
+                                              or None)
     db.log_event = lambda acct, strategy, decision, reason="", detail=None, dedup=False: (
         EVENTS.append({"account": acct, "strategy": strategy, "decision": decision,
                        "reason": reason, "detail": detail}) or len(EVENTS))
@@ -137,6 +140,42 @@ def test_short_position_close_in_flight() -> None:
     selfheal.selfheal_account("yolo")
     check("no order was submitted", SUBMITTED == [], f"submitted={SUBMITTED}")
     check("journaled as no-action", _decisions() == ["skip"], f"decisions={_decisions()}")
+
+
+def test_partial_target_fill_is_not_a_naked_position() -> None:
+    print("R2/R1: bracket target limit filling (4 of 15 shares left, held by the limit)")
+    # 2026-11-25 weekly TLT: the bracket's OCO cancelled the stop leg the moment
+    # the target limit started filling, so the position read as 4 shares with no
+    # protective stop while those 4 were held by the still-working limit. The
+    # guard only recognised 'market' closes, so R2 tried to attach a stop, got
+    # HTTP 403 40310000 'insufficient qty available' every tick, and R1 wrote the
+    # mid-fill 4 shares over the trade's 15 (which then mis-sized the closed P/L).
+    _install("weekly", [_pos("TLT", 4, avg=80.19, cur=82.37)],
+             [_order("TLT", "sell", "limit", qty=15, status="partially_filled",
+                     oid="a7213d14")],
+             [{"id": 66, "account": "weekly", "symbol": "TLT", "qty": 15,
+               "stop_price": 79.06, "target_price": 82.05, "order_id": "9fdb4c46",
+               "note": "", "status": "open"}])
+    selfheal.selfheal_account("weekly")
+    check("no order submitted", SUBMITTED == [], f"submitted={SUBMITTED}")
+    check("no error event", "error" not in _decisions(), f"decisions={_decisions()}")
+    check("journaled as no-action", set(_decisions()) == {"skip"}, f"decisions={_decisions()}")
+    check("the trade's 15-share qty was NOT rewritten to the 4-share remainder",
+          [u for u in UPDATES if "qty" in u] == [], f"updates={UPDATES}")
+    check("the skip names the order holding the shares",
+          any("a7213d14" in str(e.get("detail") or "") for e in EVENTS),
+          f"events={EVENTS}")
+
+
+def test_qty_synced_when_nothing_is_closing() -> None:
+    print("R1: a genuine DB/broker qty drift with no working order is still synced")
+    _install("daily", [_pos("XLF", 20)], [], [_trade("XLF", 22)])
+    selfheal.selfheal_account("daily")
+    qty_updates = [u for u in UPDATES if "qty" in u]
+    check("qty synced to the broker's",
+          bool(qty_updates) and qty_updates[0]["qty"] == 20,
+          f"updates={UPDATES}")
+    check("no skip event", "skip" not in _decisions(), f"decisions={_decisions()}")
 
 
 def test_naked_position_is_still_healed() -> None:
@@ -226,6 +265,8 @@ def test_breached_stop_outside_hours_is_not_a_market_order() -> None:
 def main() -> None:
     for fn in (test_exit_in_flight_is_left_alone,
                test_short_position_close_in_flight,
+               test_partial_target_fill_is_not_a_naked_position,
+               test_qty_synced_when_nothing_is_closing,
                test_naked_position_is_still_healed,
                test_opening_order_does_not_suppress_healing,
                test_protected_position_untouched,
