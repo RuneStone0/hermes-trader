@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import config
 import db
@@ -129,9 +130,23 @@ def _band_gap_atr(bars) -> float | None:
     return 0.0                     # inside the band: nothing left to gap
 
 
+def _session_close_et(clock):
+    """Today's scheduled close, in ET. None if the clock has no next_close."""
+    nc = clock.get("next_close")
+    if not nc:
+        return None
+    try:
+        return datetime.fromisoformat(nc).astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--half-day-only", action="store_true",
+                    help="run ONLY when today is a shortened session (13:00 ET close); "
+                         "exits immediately otherwise. Used by the 16:30 UTC job.")
     ap.add_argument("--assume-open", action="store_true",
                     help="TEST ONLY: skip the market-clock gate so the scan can be "
                          "exercised outside RTH. Never set this in the job.")
@@ -139,6 +154,20 @@ def main() -> None:
 
     db.init_db()
     client = AlpacaClient(ACCOUNT)
+
+    if args.half_day_only:
+        try:
+            clock = client.clock()
+        except AlpacaError as e:
+            print(f"[portfolio] clock error: {e}")
+            return
+        close_et = _session_close_et(clock)
+        if close_et is None or close_et.hour > 14:
+            print("[portfolio] normal session (close > 14:00 ET) — half-day run "
+                  "stands down; the 20:45 UTC job covers today")
+            return
+        print(f"[portfolio] SHORT session detected (close "
+              f"{close_et.strftime('%H:%M ET')}) — covering it")
 
     if not args.assume_open:
         try:
@@ -148,6 +177,7 @@ def main() -> None:
             db.log_event(ACCOUNT, STRATEGY, "error", f"clock error: {e}", dedup=True)
             return
         if not clock.get("is_open"):
+            print("[portfolio] market closed — nothing to do")
             db.log_event(ACCOUNT, STRATEGY, "skip", "market closed", dedup=True)
             return
 

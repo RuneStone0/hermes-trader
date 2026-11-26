@@ -38,6 +38,14 @@ JOBS = [
     # close-based.
     {"name": "portfolio", "type": "times", "times": ["20:45"],
      "cmd": [sys.executable, "portfolio_run.py"], "timeout": 240},
+    # Half-day guard. A shortened session (day after Thanksgiving, Christmas Eve,
+    # July 3) closes at 13:00 ET = 18:00 UTC, which is BEFORE the 20:45 UTC run,
+    # so the sleeve would silently miss the whole day. This companion fires at
+    # 16:30 UTC (11:30 ET in winter, 12:30 ET in summer — before either close)
+    # and exits immediately unless today really is a short session.
+    {"name": "portfolio_half_day", "type": "times", "times": ["16:30"],
+     "cmd": [sys.executable, "portfolio_run.py", "--half-day-only"],
+     "timeout": 240},
     {"name": "reconcile", "type": "interval", "interval_s": 600,
      "cmd": [sys.executable, "reconcile.py"], "timeout": 180},
     {"name": "selfheal", "type": "interval", "interval_s": 600,
